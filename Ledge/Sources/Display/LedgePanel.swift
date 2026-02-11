@@ -1,0 +1,96 @@
+import AppKit
+import SwiftUI
+
+/// A non-activating panel that displays the widget dashboard on the Xeneon Edge.
+///
+/// This NSPanel subclass is the core of Ledge's focus management. By using the
+/// `.nonactivatingPanel` style mask (set at init time — this is critical due to
+/// an AppKit bug), the panel can receive touch/mouse input without activating
+/// the Ledge application or stealing focus from the user's foreground app.
+///
+/// See docs/FOCUS_MANAGEMENT.md for the full rationale.
+class LedgePanel: NSPanel {
+
+    /// Creates a new LedgePanel covering the given screen.
+    ///
+    /// - Parameter screen: The NSScreen to display the panel on (should be the Xeneon Edge).
+    convenience init(on screen: NSScreen) {
+        // CRITICAL: .nonactivatingPanel MUST be set here at init time.
+        // Setting it later causes a known AppKit bug where kCGSPreventsActivationTagBit
+        // is not properly toggled. See: https://philz.blog/nspanel-nonactivating-style-mask-flag/
+        self.init(
+            contentRect: screen.frame,
+            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        configurePanel()
+    }
+
+    private func configurePanel() {
+        // Float above normal windows
+        level = .floating
+        isFloatingPanel = true
+
+        // Don't hide when the app loses focus — the whole point is to always be visible
+        hidesOnDeactivate = false
+
+        // Visual properties
+        hasShadow = false
+        isOpaque = true
+        backgroundColor = .black
+
+        // Accept mouse/touch movement events
+        acceptsMouseMovedEvents = true
+
+        // Don't allow dragging the panel by its background
+        isMovableByWindowBackground = false
+
+        // Appear on all Spaces and alongside fullscreen apps on the primary display
+        collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary
+        ]
+
+        // Hide the title bar completely
+        titleVisibility = .hidden
+        titlebarAppearsTransparent = true
+    }
+
+    // MARK: - Focus Management
+
+    /// Allow the panel to become the key window so it can receive keyboard/touch input.
+    override var canBecomeKey: Bool { true }
+
+    /// Prevent the panel from becoming the main window — this is what stops focus stealing.
+    override var canBecomeMain: Bool { false }
+
+    /// Accept first responder for touch/mouse events.
+    override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Event Handling
+
+    /// Ensure the panel becomes key when clicked/touched so that SwiftUI's
+    /// gesture recognisers are active. With .nonactivatingPanel this won't
+    /// steal focus from the foreground app — it only makes this panel the
+    /// key window (receives input) without becoming the main window.
+    override func mouseDown(with event: NSEvent) {
+        if !isKeyWindow {
+            makeKey()
+        }
+        // Let NSPanel's default dispatch handle hit-testing and routing
+        // to the NSHostingView (SwiftUI). Do NOT manually forward to contentView
+        // — that bypasses the responder chain and breaks gesture recognisers.
+        super.mouseDown(with: event)
+    }
+
+    // MARK: - Lifecycle
+
+    /// Reposition the panel when the target screen's frame changes
+    /// (e.g., resolution change, display rearrangement).
+    func reposition(on screen: NSScreen) {
+        setFrame(screen.frame, display: true, animate: false)
+    }
+}
