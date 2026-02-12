@@ -21,6 +21,7 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
         var artworkURL: String = ""
         var trackDuration: Double = 0  // seconds
         var playerPosition: Double = 0  // seconds
+        var volume: Int = 50  // 0-100
     }
 
     /// Whether Spotify is currently running.
@@ -42,6 +43,7 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
             else
                 set isPlaying to "false"
             end if
+            set vol to sound volume
             try
                 set trackName to name of current track
                 set artistName to artist of current track
@@ -49,9 +51,9 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
                 set artURL to artwork url of current track
                 set trackDur to (duration of current track) / 1000
                 set playerPos to player position
-                return isPlaying & "|||" & trackName & "|||" & artistName & "|||" & albumName & "|||" & artURL & "|||" & (trackDur as text) & "|||" & (playerPos as text)
+                return isPlaying & "|||" & trackName & "|||" & artistName & "|||" & albumName & "|||" & artURL & "|||" & (trackDur as text) & "|||" & (playerPos as text) & "|||" & (vol as text)
             on error
-                return isPlaying & "|||" & "" & "|||" & "" & "|||" & "" & "|||" & "" & "|||" & "0" & "|||" & "0"
+                return isPlaying & "|||" & "" & "|||" & "" & "|||" & "" & "|||" & "" & "|||" & "0" & "|||" & "0" & "|||" & (vol as text)
             end try
         end tell
         """
@@ -68,7 +70,8 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
             albumName: parts[3],
             artworkURL: parts[4],
             trackDuration: Double(parts[5]) ?? 0,
-            playerPosition: Double(parts[6]) ?? 0
+            playerPosition: Double(parts[6]) ?? 0,
+            volume: parts.count >= 8 ? (Int(parts[7]) ?? 50) : 50
         )
     }
 
@@ -85,6 +88,12 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
     /// Skip to previous track.
     func previousTrack() {
         runAppleScriptFire("tell application \"Spotify\" to previous track")
+    }
+
+    /// Set Spotify's internal volume (0-100).
+    func setVolume(_ volume: Int) {
+        let clamped = max(0, min(100, volume))
+        runAppleScriptFire("tell application \"Spotify\" to set sound volume to \(clamped)")
     }
 
     /// Bring Spotify to the foreground.

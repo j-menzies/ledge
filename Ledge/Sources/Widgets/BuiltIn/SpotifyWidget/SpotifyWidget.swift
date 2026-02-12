@@ -172,16 +172,35 @@ struct SpotifyWidgetView: View {
                         Spacer()
                     }
                     .overlay(alignment: .trailing) {
-                        // Open Spotify button — pinned to the right
-                        Button {
-                            bridge.activateSpotify()
-                        } label: {
-                            Image(systemName: "arrow.up.forward.square")
-                                .font(.system(size: 18))
+                        // Volume + Open Spotify — pinned right
+                        HStack(spacing: 8) {
+                            Image(systemName: volumeIcon)
+                                .font(.system(size: 14))
                                 .foregroundColor(theme.tertiaryText)
+                                .frame(width: 16)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(state.volume) },
+                                    set: { newVal in
+                                        state.volume = Int(newVal)
+                                        bridge.setVolume(Int(newVal))
+                                    }
+                                ),
+                                in: 0...100
+                            )
+                            .frame(width: 80)
+                            .tint(.green)
+
+                            Button {
+                                bridge.activateSpotify()
+                            } label: {
+                                Image(systemName: "arrow.up.forward.square")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(theme.tertiaryText)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open Spotify")
                         }
-                        .buttonStyle(.plain)
-                        .help("Open Spotify")
                     }
                     .padding(.top, 6)
 
@@ -238,6 +257,13 @@ struct SpotifyWidgetView: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var volumeIcon: String {
+        if state.volume == 0 { return "speaker.slash.fill" }
+        if state.volume < 33 { return "speaker.wave.1.fill" }
+        if state.volume < 66 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
     }
 
     // MARK: - Helpers

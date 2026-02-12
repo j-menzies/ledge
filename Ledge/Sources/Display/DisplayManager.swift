@@ -114,8 +114,12 @@ class DisplayManager: ObservableObject {
     private var displayReconfigurationToken: Any?
     private var permissionPollTimer: Timer?
     private var appActivationObserver: Any?
-    /// Observer for app activation changes (to reapply presentation options).
-    private var activationObserver: Any?
+    /// A helper window that enters macOS native fullscreen on the Edge display.
+    /// This creates a fullscreen Space which auto-hides the menu bar per-display.
+    /// The LedgePanel (with .fullScreenAuxiliary) renders on top of it.
+    private var fullscreenHelper: NSWindow?
+    /// Observer for fullscreen entry to show the panel once the Space is ready.
+    private var fullscreenObserver: Any?
 
     // MARK: - Lifecycle
 
@@ -181,16 +185,16 @@ class DisplayManager: ObservableObject {
             logger.info("Created LedgePanel on Xeneon Edge")
         }
 
+        // If "Displays have separate Spaces" is on, secondary displays have their own
+        // menu bar. Use a fullscreen helper window to auto-hide it — this mimics what
+        // Safari/Chrome do when entering fullscreen on a secondary display.
+        if NSScreen.screensHaveSeparateSpaces {
+            ensureFullscreenHelper(on: screen)
+        }
+
         panel?.makeKeyAndOrderFront(nil)
         isActive = true
         statusMessage = "Active on \(screen.localizedName)"
-
-        // Hide the menu bar and Dock via presentation options.
-        // This only takes effect while Ledge is the active app, so we also
-        // reapply it whenever the app re-activates (see observeActivation).
-        applyPresentationOptions()
-        observeActivation()
-
         logger.info("Panel is now visible on Xeneon Edge")
     }
 
@@ -198,7 +202,7 @@ class DisplayManager: ObservableObject {
     func hidePanel() {
         panel?.orderOut(nil)
         isActive = false
-        clearPresentationOptions()
+        tearDownFullscreenHelper()
         statusMessage = "Panel hidden (Xeneon Edge still connected)"
         logger.info("Panel hidden")
     }
@@ -208,7 +212,7 @@ class DisplayManager: ObservableObject {
         panel?.orderOut(nil)
         panel = nil
         isActive = false
-        clearPresentationOptions()
+        tearDownFullscreenHelper()
         logger.info("Panel destroyed")
     }
 
@@ -409,47 +413,59 @@ class DisplayManager: ObservableObject {
         }
     }
 
-    // MARK: - Menu Bar Hiding (Presentation Options)
+    // MARK: - Fullscreen Helper (Menu Bar Hiding)
 
-    /// Apply presentation options to hide the menu bar and Dock.
+    /// Create a helper window that enters native macOS fullscreen on the Edge display.
     ///
-    /// macOS presentation options only take effect while the app is active. For a
-    /// `.nonactivatingPanel`-based app this means the menu bar reappears when another
-    /// app is in the foreground. We reapply whenever the app re-activates (see
-    /// `observeActivation`) so it's hidden again when the user interacts with Ledge.
-    private func applyPresentationOptions() {
-        NSApp.presentationOptions = [.hideMenuBar, .hideDock]
-        logger.info("Applied presentation options — menu bar and Dock hidden")
+    /// When a window goes fullscreen on a secondary display, macOS creates a dedicated
+    /// fullscreen Space for that display and auto-hides the menu bar. This is the same
+    /// mechanism used by Safari, Chrome, etc. when you click "Full Screen > Entire Screen".
+    ///
+    /// The LedgePanel (with `.fullScreenAuxiliary` + `.canJoinAllSpaces`) renders on top
+    /// of the fullscreen helper, receiving all touch/mouse input as before.
+    private func ensureFullscreenHelper(on screen: NSScreen) {
+        guard fullscreenHelper == nil else { return }
+
+        // The helper needs .titled for toggleFullScreen to work. fullSizeContentView +
+        // transparent titlebar makes the titlebar invisible. The window is entirely black
+        // and serves only to create the fullscreen Space.
+        let helper = NSWindow(
+            contentRect: screen.frame,
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        helper.titleVisibility = .hidden
+        helper.titlebarAppearsTransparent = true
+        helper.backgroundColor = .black
+        helper.isReleasedWhenClosed = false
+        helper.hasShadow = false
+        helper.collectionBehavior = [.fullScreenPrimary]
+        helper.setFrame(screen.frame, display: false)
+
+        fullscreenHelper = helper
+
+        // Show and enter fullscreen
+        helper.orderFront(nil)
+        helper.toggleFullScreen(nil)
+
+        logger.info("Fullscreen helper created — entering fullscreen on \(screen.localizedName)")
     }
 
-    /// Restore default presentation options (menu bar and Dock visible).
-    private func clearPresentationOptions() {
-        NSApp.presentationOptions = []
-        tearDownActivationObserver()
-        logger.info("Cleared presentation options")
-    }
-
-    /// Watch for app activation to reapply presentation options.
-    private func observeActivation() {
-        guard activationObserver == nil else { return }
-        activationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.isActive else { return }
-                self.applyPresentationOptions()
-            }
-        }
-    }
-
-    /// Remove the activation observer.
-    private func tearDownActivationObserver() {
-        if let observer = activationObserver {
+    /// Exit fullscreen and clean up the helper window.
+    private func tearDownFullscreenHelper() {
+        if let observer = fullscreenObserver {
             NotificationCenter.default.removeObserver(observer)
-            activationObserver = nil
+            fullscreenObserver = nil
         }
+        guard let helper = fullscreenHelper else { return }
+        if helper.styleMask.contains(.fullScreen) {
+            helper.toggleFullScreen(nil)
+        }
+        helper.orderOut(nil)
+        fullscreenHelper = nil
+        logger.info("Fullscreen helper torn down")
     }
 
     // MARK: - Detection Helpers

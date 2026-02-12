@@ -497,10 +497,15 @@ struct InteractiveGridEditor: View {
     let layoutManager: LayoutManager
     @Binding var selectedWidgetID: UUID?
 
-    @State private var dragOffset: CGSize = .zero
+    /// During a drag, tracks the snapped grid position (col, row) the widget is hovering over.
+    @State private var dragSnappedCol: Int?
+    @State private var dragSnappedRow: Int?
     @State private var draggingWidgetID: UUID?
+
+    /// During a resize, tracks the snapped span.
+    @State private var resizeSnappedCols: Int?
+    @State private var resizeSnappedRows: Int?
     @State private var resizingWidgetID: UUID?
-    @State private var resizeOffset: CGSize = .zero
 
     private let widgetColors: [Color] = [
         .blue, .purple, .green, .orange, .pink, .cyan, .indigo, .teal, .mint, .yellow
@@ -535,13 +540,16 @@ struct InteractiveGridEditor: View {
                     let descriptor = WidgetRegistry.shared.registeredTypes[placement.widgetTypeID]
                     let color = widgetColors[index % widgetColors.count]
 
-                    let w = CGFloat(placement.columnSpan) * cellW + CGFloat(placement.columnSpan - 1) * gap
-                    let h = CGFloat(placement.rowSpan) * cellH + CGFloat(placement.rowSpan - 1) * gap
-                    let x = CGFloat(placement.column) * (cellW + gap)
-                    let y = CGFloat(placement.row) * (cellH + gap)
+                    // Use snapped position/size during drag/resize, actual placement otherwise
+                    let col = isDragging ? (dragSnappedCol ?? placement.column) : placement.column
+                    let row = isDragging ? (dragSnappedRow ?? placement.row) : placement.row
+                    let colSpan = isResizing ? (resizeSnappedCols ?? placement.columnSpan) : placement.columnSpan
+                    let rowSpan = isResizing ? (resizeSnappedRows ?? placement.rowSpan) : placement.rowSpan
 
-                    let resizedW = isResizing ? w + resizeOffset.width : w
-                    let resizedH = isResizing ? h + resizeOffset.height : h
+                    let w = CGFloat(colSpan) * cellW + CGFloat(colSpan - 1) * gap
+                    let h = CGFloat(rowSpan) * cellH + CGFloat(rowSpan - 1) * gap
+                    let x = CGFloat(col) * (cellW + gap)
+                    let y = CGFloat(row) * (cellH + gap)
 
                     ZStack {
                         RoundedRectangle(cornerRadius: 5)
@@ -575,12 +583,27 @@ struct InteractiveGridEditor: View {
                                             DragGesture()
                                                 .onChanged { value in
                                                     resizingWidgetID = placement.id
-                                                    resizeOffset = value.translation
+                                                    let newCols = max(1, min(
+                                                        layout.columns - placement.column,
+                                                        placement.columnSpan + Int((value.translation.width / (cellW + gap)).rounded())
+                                                    ))
+                                                    let newRows = max(1, min(
+                                                        layout.rows - placement.row,
+                                                        placement.rowSpan + Int((value.translation.height / (cellH + gap)).rounded())
+                                                    ))
+                                                    resizeSnappedCols = newCols
+                                                    resizeSnappedRows = newRows
                                                 }
-                                                .onEnded { value in
-                                                    commitResize(placement: placement, cellW: cellW, cellH: cellH, gap: gap)
+                                                .onEnded { _ in
+                                                    if let cols = resizeSnappedCols, let rows = resizeSnappedRows {
+                                                        var p = placement
+                                                        p.columnSpan = cols
+                                                        p.rowSpan = rows
+                                                        layoutManager.updateWidget(p)
+                                                    }
                                                     resizingWidgetID = nil
-                                                    resizeOffset = .zero
+                                                    resizeSnappedCols = nil
+                                                    resizeSnappedRows = nil
                                                 }
                                         )
                                 }
@@ -588,12 +611,14 @@ struct InteractiveGridEditor: View {
                             .padding(2)
                         }
                     }
-                    .frame(width: max(resizedW, cellW * 0.5), height: max(resizedH, cellH * 0.5))
-                    .offset(
-                        x: x + (isDragging ? dragOffset.width : 0),
-                        y: y + (isDragging ? dragOffset.height : 0)
-                    )
-                    .zIndex(isSelected ? 10 : 0)
+                    .frame(width: w, height: h)
+                    .offset(x: x, y: y)
+                    .animation(.easeOut(duration: 0.15), value: col)
+                    .animation(.easeOut(duration: 0.15), value: row)
+                    .animation(.easeOut(duration: 0.15), value: colSpan)
+                    .animation(.easeOut(duration: 0.15), value: rowSpan)
+                    .zIndex(isDragging || isSelected ? 10 : 0)
+                    .opacity(isDragging ? 0.8 : 1.0)
                     .onTapGesture {
                         selectedWidgetID = placement.id
                     }
@@ -603,15 +628,28 @@ struct InteractiveGridEditor: View {
                                 if resizingWidgetID == nil {
                                     draggingWidgetID = placement.id
                                     selectedWidgetID = placement.id
-                                    dragOffset = value.translation
+                                    let newCol = max(0, min(
+                                        layout.columns - placement.columnSpan,
+                                        placement.column + Int((value.translation.width / (cellW + gap)).rounded())
+                                    ))
+                                    let newRow = max(0, min(
+                                        layout.rows - placement.rowSpan,
+                                        placement.row + Int((value.translation.height / (cellH + gap)).rounded())
+                                    ))
+                                    dragSnappedCol = newCol
+                                    dragSnappedRow = newRow
                                 }
                             }
-                            .onEnded { value in
-                                if draggingWidgetID == placement.id {
-                                    commitDrag(placement: placement, cellW: cellW, cellH: cellH, gap: gap)
-                                    draggingWidgetID = nil
-                                    dragOffset = .zero
+                            .onEnded { _ in
+                                if let col = dragSnappedCol, let row = dragSnappedRow {
+                                    var p = placement
+                                    p.column = col
+                                    p.row = row
+                                    layoutManager.updateWidget(p)
                                 }
+                                draggingWidgetID = nil
+                                dragSnappedCol = nil
+                                dragSnappedRow = nil
                             }
                     )
                 }
@@ -623,28 +661,6 @@ struct InteractiveGridEditor: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(Color.gray.opacity(0.2), lineWidth: 1)
         )
-    }
-
-    private func commitDrag(placement: WidgetPlacement, cellW: CGFloat, cellH: CGFloat, gap: CGFloat) {
-        let layout = layoutManager.activeLayout
-        let colDelta = Int((dragOffset.width / (cellW + gap)).rounded())
-        let rowDelta = Int((dragOffset.height / (cellH + gap)).rounded())
-
-        var p = placement
-        p.column = max(0, min(layout.columns - p.columnSpan, p.column + colDelta))
-        p.row = max(0, min(layout.rows - p.rowSpan, p.row + rowDelta))
-        layoutManager.updateWidget(p)
-    }
-
-    private func commitResize(placement: WidgetPlacement, cellW: CGFloat, cellH: CGFloat, gap: CGFloat) {
-        let layout = layoutManager.activeLayout
-        let colDelta = Int((resizeOffset.width / (cellW + gap)).rounded())
-        let rowDelta = Int((resizeOffset.height / (cellH + gap)).rounded())
-
-        var p = placement
-        p.columnSpan = max(1, min(layout.columns - p.column, p.columnSpan + colDelta))
-        p.rowSpan = max(1, min(layout.rows - p.row, p.rowSpan + rowDelta))
-        layoutManager.updateWidget(p)
     }
 }
 
