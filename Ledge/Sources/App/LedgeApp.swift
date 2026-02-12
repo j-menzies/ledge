@@ -9,11 +9,17 @@ struct LedgeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Settings window — appears on the primary display
+        // Settings window — appears on the primary display.
+        // ThemeManager is passed via .environment() — SettingsView observes
+        // it directly and derives the theme, so changes propagate live.
         Window("Ledge Settings", id: "settings") {
-            SettingsView()
-                .environmentObject(appDelegate.displayManager)
+            SettingsView(
+                layoutManager: appDelegate.layoutManager,
+                configStore: appDelegate.configStore
+            )
+            .environmentObject(appDelegate.displayManager)
+            .environment(appDelegate.themeManager)
         }
-        .defaultSize(width: 600, height: 400)
+        .defaultSize(width: 800, height: 650)
     }
 }

@@ -38,16 +38,84 @@ class DisplayManager: ObservableObject {
     /// The touch remapper that fixes macOS's incorrect touchscreen-to-display mapping.
     let touchRemapper = TouchRemapper()
 
-    /// Whether the touch remapper is active and remapping events.
+    /// IOKit HID-based touchscreen detector — identifies the device without manual calibration.
+    private let hidDetector = HIDTouchDetector()
+
+    /// Whether Accessibility permissions have been granted (required for CGEventTap).
+    @Published private(set) var accessibilityPermission: AccessibilityPermission = .unknown
+
+    /// Whether the touch remapper event tap is active.
     @Published private(set) var isTouchRemapperActive: Bool = false
 
-    /// Status of the touch remapper for the settings UI.
-    @Published private(set) var touchStatus: String = "Not started"
+    /// Whether the touchscreen device has been identified via calibration.
+    @Published private(set) var calibrationState: CalibrationState = .notStarted
+
+    /// The learned HID device ID for the touchscreen (nil until calibrated).
+    @Published private(set) var learnedDeviceID: Int64? = nil
+
+    /// Info about the most recent touch event (for debug overlay).
+    @Published private(set) var lastTouchInfo: TouchEventInfo? = nil
+
+    /// Derived status string for the settings UI.
+    var touchStatus: String {
+        switch accessibilityPermission {
+        case .unknown:
+            return "Not started"
+        case .waiting:
+            return "Waiting for Accessibility permission..."
+        case .granted:
+            if !isTouchRemapperActive {
+                return "Event tap failed to start"
+            }
+            switch calibrationState {
+            case .notStarted:
+                return "Active — waiting for calibration"
+            case .learning:
+                return "Calibrating — touch the Xeneon Edge screen..."
+            case .calibrated:
+                if let id = learnedDeviceID {
+                    return "Active — device \(id)"
+                }
+                return "Active — calibrated"
+            case .autoDetected:
+                if let id = learnedDeviceID {
+                    return "Active — auto-detected device \(id)"
+                }
+                return "Active — auto-detected"
+            }
+        }
+    }
+
+    // MARK: - Touch Types
+
+    enum AccessibilityPermission: String {
+        case unknown = "Unknown"
+        case waiting = "Waiting for grant..."
+        case granted = "Granted"
+    }
+
+    enum CalibrationState: String {
+        case notStarted = "Not started"
+        case learning = "Touch the Xeneon Edge..."
+        case calibrated = "Calibrated"
+        case autoDetected = "Auto-detected"
+    }
+
+    struct TouchEventInfo {
+        let deviceID: Int64
+        let originalPoint: CGPoint
+        let remappedPoint: CGPoint?
+        let timestamp: Date
+    }
 
     // MARK: - Private
 
     private let logger = Logger(subsystem: "com.ledge.app", category: "DisplayManager")
     private var displayReconfigurationToken: Any?
+    private var permissionPollTimer: Timer?
+    private var appActivationObserver: Any?
+    /// Observer for app activation changes (to reapply presentation options).
+    private var activationObserver: Any?
 
     // MARK: - Lifecycle
 
@@ -116,6 +184,13 @@ class DisplayManager: ObservableObject {
         panel?.makeKeyAndOrderFront(nil)
         isActive = true
         statusMessage = "Active on \(screen.localizedName)"
+
+        // Hide the menu bar and Dock via presentation options.
+        // This only takes effect while Ledge is the active app, so we also
+        // reapply it whenever the app re-activates (see observeActivation).
+        applyPresentationOptions()
+        observeActivation()
+
         logger.info("Panel is now visible on Xeneon Edge")
     }
 
@@ -123,6 +198,7 @@ class DisplayManager: ObservableObject {
     func hidePanel() {
         panel?.orderOut(nil)
         isActive = false
+        clearPresentationOptions()
         statusMessage = "Panel hidden (Xeneon Edge still connected)"
         logger.info("Panel hidden")
     }
@@ -132,6 +208,7 @@ class DisplayManager: ObservableObject {
         panel?.orderOut(nil)
         panel = nil
         isActive = false
+        clearPresentationOptions()
         logger.info("Panel destroyed")
     }
 
@@ -184,46 +261,194 @@ class DisplayManager: ObservableObject {
 
     // MARK: - Touch Remapper Management
 
-    /// Start the touch remapper. Requires Accessibility permissions.
+    /// Start the touch remapper. Requests Accessibility permissions if needed
+    /// and polls until granted, then automatically starts the event tap and calibration.
     func startTouchRemapper() {
-        guard let screen = xeneonScreen else {
-            touchStatus = "Cannot start: Xeneon Edge not detected"
+        guard xeneonScreen != nil else {
+            accessibilityPermission = .unknown
+            logger.warning("Cannot start touch remapper: Xeneon Edge not detected")
             return
         }
 
         if !touchRemapper.checkAccessibilityPermissions() {
             touchRemapper.requestAccessibilityPermissions()
-            touchStatus = "Waiting for Accessibility permission..."
+            accessibilityPermission = .waiting
+            beginPermissionPolling()
+            logger.info("Accessibility permission requested — polling for grant")
             return
         }
 
-        touchRemapper.start(targetScreen: screen)
-        isTouchRemapperActive = touchRemapper.isActive
-        touchStatus = touchRemapper.isActive ? "Active — remapping touch to Xeneon Edge" : "Failed to start"
+        accessibilityPermission = .granted
+        proceedWithTouchRemapper()
     }
 
-    /// Stop the touch remapper.
+    /// Stop the touch remapper and reset all touch state.
     func stopTouchRemapper() {
         touchRemapper.stop()
+        tearDownPermissionPolling()
         isTouchRemapperActive = false
-        touchStatus = "Stopped"
+        calibrationState = .notStarted
+        learnedDeviceID = nil
+        lastTouchInfo = nil
+        logger.info("Touch remapper stopped")
     }
 
-    /// Start calibration — ask the user to touch the Xeneon Edge so we can
-    /// learn which HID device ID corresponds to the touchscreen.
+    /// Start calibration — the next touch event identifies the touchscreen device.
     func calibrateTouch() {
         guard touchRemapper.isActive else {
-            touchStatus = "Start the remapper first"
+            logger.warning("Cannot calibrate: touch remapper not active")
             return
         }
 
         touchRemapper.startLearning()
-        touchStatus = "Calibrating — touch the Xeneon Edge screen..."
+        calibrationState = .learning
 
         touchRemapper.onLearningComplete = { [weak self] in
             Task { @MainActor in
-                self?.touchStatus = "Calibrated — touch remapping active"
+                self?.calibrationState = .calibrated
+                self?.learnedDeviceID = self?.touchRemapper.touchDeviceID
+                self?.logger.info("Touch calibration complete — device ID: \(self?.touchRemapper.touchDeviceID ?? -1)")
             }
+        }
+    }
+
+    // MARK: - Permission Polling
+
+    /// Called once Accessibility permission is confirmed granted.
+    private func proceedWithTouchRemapper() {
+        guard let screen = xeneonScreen else { return }
+
+        // Auto-detect the touchscreen device via IOKit HID.
+        // This identifies the exact USB touch controller by VID/PID, eliminating
+        // the need for manual calibration (which was unreliable — it often
+        // captured the mouse instead of the touchscreen).
+        if let result = hidDetector.detect() {
+            touchRemapper.setTouchDeviceIDs(result.allDeviceIDs)
+            calibrationState = .autoDetected
+            learnedDeviceID = result.allDeviceIDs.sorted().last  // show highest ID in UI (likely the event driver)
+            logger.info("Auto-detected touchscreen: \(result.product ?? "unknown") (\(result.allDeviceIDs.count) possible IDs)")
+        } else {
+            logger.warning("Could not auto-detect touchscreen — manual calibration available via Settings")
+            calibrationState = .notStarted
+        }
+
+        // Wire up the debug event callback
+        touchRemapper.onEventProcessed = { [weak self] deviceID, original, remapped in
+            Task { @MainActor in
+                self?.lastTouchInfo = TouchEventInfo(
+                    deviceID: deviceID,
+                    originalPoint: original,
+                    remappedPoint: remapped,
+                    timestamp: Date()
+                )
+            }
+        }
+
+        touchRemapper.start(targetScreen: screen)
+        isTouchRemapperActive = touchRemapper.isActive
+
+        if touchRemapper.isActive {
+            if calibrationState == .autoDetected {
+                logger.info("Event tap active — touchscreen auto-detected, ready for input")
+            } else {
+                logger.info("Event tap active — use Settings to calibrate touch device")
+            }
+        } else {
+            logger.error("Event tap failed to start")
+        }
+    }
+
+    /// Start polling for Accessibility permission grant (timer + app activation observer).
+    private func beginPermissionPolling() {
+        tearDownPermissionPolling()
+
+        // Poll every 2 seconds
+        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkAndProceedIfPermitted()
+            }
+        }
+
+        // Also check when the user switches back to Ledge (common flow: grant in System Settings → switch back)
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier == Bundle.main.bundleIdentifier else { return }
+            Task { @MainActor in
+                self?.checkAndProceedIfPermitted()
+            }
+        }
+    }
+
+    /// Check if permission was granted and proceed if so.
+    private func checkAndProceedIfPermitted() {
+        guard accessibilityPermission == .waiting else {
+            tearDownPermissionPolling()
+            return
+        }
+
+        if touchRemapper.checkAccessibilityPermissions() {
+            logger.info("Accessibility permission granted")
+            accessibilityPermission = .granted
+            tearDownPermissionPolling()
+            proceedWithTouchRemapper()
+        }
+    }
+
+    /// Clean up permission polling resources.
+    private func tearDownPermissionPolling() {
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
+
+        if let observer = appActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            appActivationObserver = nil
+        }
+    }
+
+    // MARK: - Menu Bar Hiding (Presentation Options)
+
+    /// Apply presentation options to hide the menu bar and Dock.
+    ///
+    /// macOS presentation options only take effect while the app is active. For a
+    /// `.nonactivatingPanel`-based app this means the menu bar reappears when another
+    /// app is in the foreground. We reapply whenever the app re-activates (see
+    /// `observeActivation`) so it's hidden again when the user interacts with Ledge.
+    private func applyPresentationOptions() {
+        NSApp.presentationOptions = [.hideMenuBar, .hideDock]
+        logger.info("Applied presentation options — menu bar and Dock hidden")
+    }
+
+    /// Restore default presentation options (menu bar and Dock visible).
+    private func clearPresentationOptions() {
+        NSApp.presentationOptions = []
+        tearDownActivationObserver()
+        logger.info("Cleared presentation options")
+    }
+
+    /// Watch for app activation to reapply presentation options.
+    private func observeActivation() {
+        guard activationObserver == nil else { return }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isActive else { return }
+                self.applyPresentationOptions()
+            }
+        }
+    }
+
+    /// Remove the activation observer.
+    private func tearDownActivationObserver() {
+        if let observer = activationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            activationObserver = nil
         }
     }
 

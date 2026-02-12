@@ -20,17 +20,18 @@ class LedgePanel: NSPanel {
         // is not properly toggled. See: https://philz.blog/nspanel-nonactivating-style-mask-flag/
         self.init(
             contentRect: screen.frame,
-            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
         )
 
-        configurePanel()
+        configurePanel(on: screen)
     }
 
-    private func configurePanel() {
-        // Float above normal windows
-        level = .floating
+    private func configurePanel(on screen: NSScreen) {
+        // Screen-saver level (1000) places the panel above standard UI chrome.
+        // CGShieldingWindowLevel was too aggressive and caused input issues.
+        level = .screenSaver
         isFloatingPanel = true
 
         // Don't hide when the app loses focus — the whole point is to always be visible
@@ -46,6 +47,7 @@ class LedgePanel: NSPanel {
 
         // Don't allow dragging the panel by its background
         isMovableByWindowBackground = false
+        isMovable = false
 
         // Appear on all Spaces and alongside fullscreen apps on the primary display
         collectionBehavior = [
@@ -54,9 +56,20 @@ class LedgePanel: NSPanel {
             .stationary
         ]
 
-        // Hide the title bar completely
+        // Ensure no title bar at all
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
+
+        // Pin to the screen frame — use setFrame to bypass any content insets
+        setFrame(screen.frame, display: false)
+    }
+
+    // MARK: - Frame Constraints
+
+    /// Prevent macOS from constraining the panel frame to the "visible" area
+    /// (which excludes the menu bar region). We want full coverage.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        return frameRect
     }
 
     // MARK: - Focus Management

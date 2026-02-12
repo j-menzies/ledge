@@ -56,10 +56,9 @@ Corsair uses a proprietary USB HID protocol to communicate with the Xeneon Edge 
 
 **Current state of knowledge:**
 - Corsair's USB Vendor ID is `0x1B1C` (6940 decimal)
-- The Xeneon Edge exposes **two separate USB devices**:
-  1. **Main device**: Vendor "CORSAIR", Product "XENEON EDGE", Serial "145225445656" — this is the HID control channel for device settings (colour, brightness via proprietary protocol)
-  2. **TouchScreen device**: Product ID `0x0859` (2137 decimal), Product "TouchScreen" — this is the touch digitiser, presented as a child device at a separate USB address
-- The TouchScreen device is `bDeviceClass = 0` (defined at interface level), low-speed USB (`Device Speed = 1`), with `bcdDevice = 336` and a single configuration
+- The Xeneon Edge exposes **two separate USB devices** (see "Discovered Device Information" section for full details):
+  1. **Main device** (VID=0x1B1C/6940, PID=0x1D0D/7437): Vendor "CORSAIR", Product "XENEON EDGE" — HID control channel with vendor-specific usage page (0xFF1B/65307). This is for iCUE communication (colour profiles, firmware, etc.)
+  2. **TouchScreen device** (VID=0x27C0/10176, PID=0x0859/2137): Product "TouchScreen" — the touch digitiser, a **separate controller IC** (not Corsair-branded) with 3 HID interfaces
 - No public reverse engineering of the Xeneon Edge's HID protocol exists
 - The user's gist demonstrates colour balance control, suggesting the HID protocol is at least partially understood
 - **DDC/CI is confirmed working** on macOS — MonitorControl detects the Xeneon Edge with "Hardware (DDC)" control method, Display Identifier 2
@@ -180,7 +179,70 @@ If distributing via Developer ID (notarised), these entitlements are permitted o
 
 ## Discovered Device Information
 
-From `ioreg -p IOUSB -l` on macOS:
+### Corsair Control Interface (iCUE Channel)
+
+From `ioreg -r -c IOHIDDevice`:
+
+```
+Product:          "XENEON EDGE"
+VendorID:         6940  (0x1B1C) — Corsair
+ProductID:        7437  (0x1D0D)
+PrimaryUsagePage: 65307 (0xFF1B) — Vendor-specific (Corsair iCUE)
+PrimaryUsage:     1
+```
+
+This is the proprietary HID interface used by iCUE on Windows for colour profiles, firmware queries, and device settings. Not used for touch input.
+
+### TouchScreen Device (Touch Digitiser)
+
+The touchscreen is a **separate USB device** with a different vendor ID — it's a third-party touch controller IC, not Corsair hardware:
+
+```
+Product:   "TouchScreen"
+VendorID:  10176 (0x27C0) — NOT Corsair
+ProductID: 2137  (0x0859)
+```
+
+It exposes **3 HID interfaces**, each with a different usage page:
+
+| Interface | UsagePage | Usage | Purpose |
+|-----------|-----------|-------|---------|
+| Digitizer | 13 (0x0D) | 4 (TouchScreen) | Raw touch digitiser reports (absolute coordinates) |
+| Vendor    | 65290 (0xFEFA) | 255 | Proprietary (unknown purpose) |
+| Mouse     | 1 (GenericDesktop) | 2 (Mouse) | macOS routes touch-as-mouse events through this |
+
+### IOKit Service Tree (Touch Device)
+
+Each HID interface has child IOService nodes. This is important because CGEvent field 87 (`mouseEventDeviceID`) reports the registry entry ID of a **descendant** service, not the IOHIDDevice itself.
+
+Discovered tree structure (from IOKit registry walking):
+
+```
+IOHIDDevice (Mouse interface, UsagePage=1)
+├── IOHIDInterface
+├── AppleUserHIDEventService  ← CGEvent field 87 uses THIS node's registry ID
+│   └── IOHIDEventServiceUserClient
+├── IOHIDLibUserClient
+└── IOHIDLibUserClient
+
+IOHIDDevice (Digitizer interface, UsagePage=13)
+├── IOHIDInterface
+├── AppleUserHIDEventService
+│   └── IOHIDEventServiceUserClient
+├── IOHIDLibUserClient
+└── IOHIDLibUserClient
+
+IOHIDDevice (Vendor interface, UsagePage=65290)
+├── IOHIDInterface
+├── IOHIDLibUserClient
+└── IOHIDLibUserClient
+```
+
+**Key finding:** CGEvent field 87 does NOT match the IOHIDDevice's registry entry ID. It matches the `AppleUserHIDEventService` descendant. To correlate IOKit HID devices with CGEvent device IDs, you must walk the IOKit service tree and collect all descendant registry entry IDs.
+
+### USB Bus Info
+
+From `ioreg -p IOUSB -l`:
 
 ```
 Main device:
@@ -202,12 +264,82 @@ Child device:
 
 MonitorControl confirms: DDC hardware control works, display identified as "XENEON EDGE", Identifier 2.
 
+## Touch Input on macOS — Investigation Notes
+
+### The Problem
+
+macOS maps the Xeneon Edge's USB touchscreen coordinates to the **primary display** instead of the Edge. This is a macOS limitation — USB HID digitisers with absolute coordinates get mapped to the display at the origin, regardless of which physical screen the digitiser is attached to.
+
+### Approach 1: CGEventTap Remapping (Current — Partially Working)
+
+Intercept mouse events via `CGEventTap`, identify those from the touchscreen device, and remap coordinates from the primary display to the Edge's position.
+
+**Implementation:** `TouchRemapper.swift` + `HIDTouchDetector.swift`
+
+**What works:**
+- Auto-detection of the touchscreen via IOKit HID Manager (VID/PID matching)
+- Walking the IOKit service tree to collect all possible CGEvent device IDs
+- Identifying touchscreen events in the CGEventTap callback
+- Coordinate remapping from primary display CG coordinates to Edge CG coordinates
+- Initial touch events (mouseDown mapped to primary) get correctly remapped to Edge
+
+**What doesn't fully work:**
+- After a remapped mouseDown moves the cursor to the Edge, macOS adjusts its internal absolute coordinate mapping. Subsequent drag/up events arrive with coordinates already on the Edge rather than on the primary. This creates an inconsistency: the first event needs remapping, but follow-up events from the same gesture don't.
+- The workaround (pass through events already on the Edge) works for simple taps but may cause issues with gestures, drags, and multi-touch patterns.
+
+**Coordinate system gotchas discovered:**
+- `NSScreen.frame` uses Cocoa coordinates (Y axis up, origin at bottom-left of primary)
+- `CGEvent.location` uses CG/Quartz coordinates (Y axis down, origin at top-left of primary)
+- Primary display frames match in both systems; secondary displays do NOT
+- Conversion: `cgY = primaryHeight - cocoaY - screenHeight`
+
+**Device ID gotchas discovered:**
+- CGEvent field 87 (`mouseEventDeviceID`) uses raw value 87 — not bridged to Swift's `CGEventField` enum
+- The field reports the IOKit registry entry ID of an IOService descendant (specifically `AppleUserHIDEventService`), NOT the `IOHIDDevice` node itself
+- The touchscreen's 3 HID interfaces each have different registry entry IDs, and their descendants have yet more IDs — must collect the full set and match against any of them
+- Registry entry IDs change on device reconnect (they're assigned sequentially by the kernel)
+
+### Approach 2: IOKit HID Direct Input (Not Yet Attempted)
+
+Read raw touch digitiser reports directly via IOKit HID Manager, bypassing macOS's broken coordinate mapping entirely. Post synthetic CGEvents at the correct screen position.
+
+**Concept:**
+1. Open the Digitizer interface (UsagePage=0x0D) via `IOHIDManagerOpen`
+2. Register input value callbacks for X, Y, and Tip Switch elements
+3. Read absolute coordinates (logical min/max from the HID descriptor)
+4. Normalise to [0,1] and map to Edge's screen position
+5. Post synthetic `CGEvent` at the correct location
+6. Optionally seize the device (`kIOHIDOptionsTypeSeizeDevice`) to prevent macOS from generating its own (wrong) mouse events — requires Input Monitoring permission
+
+**Advantages:**
+- Completely bypasses macOS's broken mapping
+- No coordinate system confusion — we control the entire pipeline
+- No "post-remap feedback loop" issue
+
+**Disadvantages:**
+- Requires Input Monitoring permission (in addition to Accessibility)
+- Seizing the device is risky — if the app crashes, the touchscreen is unresponsive until reconnect
+- Must parse HID report descriptors to find the correct elements
+- Must handle all touch state (down, move, up) manually
+
+### Approach 3: Hybrid (Recommended Next Step)
+
+Keep the CGEventTap but improve the coordinate handling:
+- Use IOKit HID auto-detection (already working) to identify the device
+- Track touch state (down vs. drag/up) to know when to remap vs. pass through
+- Only remap the initial mouseDown; pass through all subsequent events for that gesture
+- Reset on mouseUp so the next gesture gets remapped fresh
+
 ## Next Steps
 
-1. **~~Connect the Xeneon Edge to a Mac~~** — DONE. Device IDs discovered (see above). Still need the main XENEON EDGE `idProduct` — run `ioreg -p IOUSB -l` without grep to find the full entry for the parent CORSAIR device.
+1. **~~Connect the Xeneon Edge to a Mac~~** — DONE. Full device tree discovered (see above), including the Corsair control interface (VID=0x1B1C, PID=0x1D0D) and the touchscreen controller (VID=0x27C0, PID=0x0859) with all 3 HID interfaces documented.
 
 2. **~~Test DDC/CI~~** — DONE. MonitorControl confirms Hardware (DDC) works with the Xeneon Edge.
 
-3. **Capture USB HID on Windows**: Use Wireshark + USBPcap while adjusting settings in iCUE. Focus on brightness, colour balance, and any widget-related communication.
+3. **~~Investigate touch remapping via CGEventTap~~** — DONE (partially working). Auto-detection via IOKit works; coordinate remapping has a post-remap feedback loop issue. See "Touch Input on macOS" section for full findings.
 
-4. **Integrate the gist**: Adapt the colour control code from the existing gist into the Ledge architecture.
+4. **Improve touch input handling**: Either refine the CGEventTap approach (track gesture state, only remap initial mouseDown) or implement direct IOKit HID digitiser reading. See Approach 2 and 3 in the touch investigation notes.
+
+5. **Capture USB HID on Windows**: Use Wireshark + USBPcap while adjusting settings in iCUE. Focus on brightness, colour balance, and any widget-related communication.
+
+6. **Integrate the gist**: Adapt the colour control code from the existing gist into the Ledge architecture.

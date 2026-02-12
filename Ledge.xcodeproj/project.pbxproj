@@ -8,7 +8,6 @@
 
 /* Begin PBXFileReference section */
 		525C69282F3BBEA000BDD89D /* Ledge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ledge.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		525C698F2F3BC0FE00BDD89D /* Ledge.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = Ledge.xcodeproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -42,13 +41,6 @@
 			isa = PBXGroup;
 			children = (
 				525C69282F3BBEA000BDD89D /* Ledge.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		525C69902F3BC0FE00BDD89D /* Products */ = {
-			isa = PBXGroup;
-			children = (
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -105,12 +97,6 @@
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 525C69292F3BBEA000BDD89D /* Products */;
 			projectDirPath = "";
-			projectReferences = (
-				{
-					ProductGroup = 525C69902F3BC0FE00BDD89D /* Products */;
-					ProjectRef = 525C698F2F3BC0FE00BDD89D /* Ledge.xcodeproj */;
-				},
-			);
 			projectRoot = "";
 			targets = (
 				525C69272F3BBEA000BDD89D /* Ledge */,
@@ -266,12 +252,16 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Ledge/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Ledge uses AppleScript to control Spotify playback and display now playing information.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Ledge needs calendar access to display your upcoming events in the Calendar widget.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Ledge uses your location to show local weather in the Weather widget.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -299,12 +289,16 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Ledge/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Ledge uses AppleScript to control Spotify playback and display now playing information.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Ledge needs calendar access to display your upcoming events in the Calendar widget.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Ledge uses your location to show local weather in the Weather widget.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

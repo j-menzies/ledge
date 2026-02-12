@@ -1,96 +1,78 @@
 import SwiftUI
-import Combine
 
 /// The root view displayed on the Xeneon Edge panel.
 ///
 /// This view hosts the grid layout and renders all active widgets.
-/// For Phase 0, it shows a simple placeholder to validate that the panel
-/// is working correctly.
+/// Observes ThemeManager directly so the dashboard updates live when
+/// the user switches themes in Settings.
 struct DashboardView: View {
+    @Environment(ThemeManager.self) private var themeManager
+    @EnvironmentObject var displayManager: DisplayManager
+    let layoutManager: LayoutManager
+    let configStore: WidgetConfigStore
+    let registry: WidgetRegistry
+
+    var body: some View {
+        GridRenderer(
+            layout: layoutManager.activeLayout,
+            configStore: configStore,
+            registry: registry
+        )
+        .environment(\.theme, themeManager.resolvedTheme)
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Touch Debug Overlay
+
+/// Debug overlay showing the touch pipeline state.
+/// Displayed on the dashboard during development to diagnose touch issues.
+struct TouchDebugOverlay: View {
     @EnvironmentObject var displayManager: DisplayManager
 
-    @State private var currentTime = Date()
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
     var body: some View {
-        ZStack {
-            // Background
-            Color.black
-                .ignoresSafeArea()
+        VStack(alignment: .leading, spacing: 4) {
+            row("AX Permission",
+                value: displayManager.accessibilityPermission.rawValue,
+                color: displayManager.accessibilityPermission == .granted ? .green : .yellow)
 
-            VStack(spacing: 20) {
-                // Title
-                Text("Ledge")
-                    .font(.system(size: 48, weight: .ultraLight, design: .default))
-                    .foregroundColor(.white)
+            row("Event Tap",
+                value: displayManager.isTouchRemapperActive ? "Active" : "Inactive",
+                color: displayManager.isTouchRemapperActive ? .green : .red)
 
-                // Clock — simple proof that the panel is rendering and updating
-                Text(currentTime, style: .time)
-                    .font(.system(size: 72, weight: .thin, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.9))
+            row("Calibration",
+                value: displayManager.calibrationState.rawValue,
+                color: (displayManager.calibrationState == .calibrated
+                    || displayManager.calibrationState == .autoDetected) ? .green : .yellow)
 
-                // Status
-                Text(displayManager.statusMessage)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.white.opacity(0.5))
-
-                Spacer().frame(height: 20)
-
-                // Touch test — tap this to verify non-focus-stealing behaviour
-                TouchTestView()
+            if let deviceID = displayManager.learnedDeviceID {
+                row("Device ID", value: "\(deviceID)", color: .green)
             }
-            .padding(40)
+
+            if let touch = displayManager.lastTouchInfo {
+                let orig = touch.originalPoint
+                row("Last Touch",
+                    value: String(format: "(%.0f, %.0f) → %@",
+                                  orig.x, orig.y,
+                                  touch.remappedPoint.map { String(format: "(%.0f, %.0f)", $0.x, $0.y) } ?? "nil"),
+                    color: .white)
+            }
         }
-        .onReceive(timer) { time in
-            currentTime = time
-        }
+        .font(.system(size: 11, weight: .regular, design: .monospaced))
+        .padding(8)
+        .background(.black.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
-}
 
-/// A simple view to test touch interaction.
-/// Tap the circle and it changes colour — verifying that touch events
-/// reach the panel without stealing focus from the primary display.
-struct TouchTestView: View {
-    @State private var tapCount = 0
-    @State private var isPressed = false
-
-    private let colours: [Color] = [
-        .blue, .green, .orange, .purple, .pink, .cyan, .yellow, .red
-    ]
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("Touch Test")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
-
+    private func row(_ label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
             Circle()
-                .fill(colours[tapCount % colours.count])
-                .frame(width: 80, height: 80)
-                .scaleEffect(isPressed ? 0.9 : 1.0)
-                .animation(.easeInOut(duration: 0.1), value: isPressed)
-                .onTapGesture {
-                    tapCount += 1
-                }
-                .onLongPressGesture(minimumDuration: 0.01, pressing: { pressing in
-                    isPressed = pressing
-                }, perform: {})
-
-            Text("Taps: \(tapCount)")
-                .font(.system(size: 14, weight: .regular, design: .monospaced))
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text("\(label):")
                 .foregroundColor(.white.opacity(0.5))
-
-            Text("Tap the circle. Your foreground app should stay focused.")
-                .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.3))
-                .multilineTextAlignment(.center)
+            Text(value)
+                .foregroundColor(.white.opacity(0.8))
         }
     }
-}
-
-#Preview {
-    DashboardView()
-        .environmentObject(DisplayManager())
-        .frame(width: 2560, height: 720)
-        .background(.black)
 }
