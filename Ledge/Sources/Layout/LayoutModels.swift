@@ -12,67 +12,67 @@ struct WidgetLayout: Codable, Identifiable, Equatable {
     var placements: [WidgetPlacement]
 
     /// Default layout for the Xeneon Edge (2560x720).
-    /// A 10-column by 3-row grid with 6 widgets.
+    /// A 20-column by 6-row grid for fine-grained widget sizing.
     static let defaultLayout = WidgetLayout(
         id: UUID(),
         name: "Default",
-        columns: 10,
-        rows: 3,
+        columns: 20,
+        rows: 6,
         placements: [
-            // Row 0-1: DateTime (2x2), Spotify (4x2), Calendar (3x2)
+            // Row 0-3: DateTime (4x4), Spotify (8x4), Calendar (6x4)
             WidgetPlacement(
                 id: UUID(),
                 widgetTypeID: "com.ledge.datetime",
                 column: 0,
                 row: 0,
-                columnSpan: 2,
-                rowSpan: 2,
+                columnSpan: 4,
+                rowSpan: 4,
                 configuration: nil
             ),
             WidgetPlacement(
                 id: UUID(),
                 widgetTypeID: "com.ledge.spotify",
-                column: 3,
+                column: 6,
                 row: 0,
+                columnSpan: 8,
+                rowSpan: 4,
+                configuration: nil
+            ),
+            WidgetPlacement(
+                id: UUID(),
+                widgetTypeID: "com.ledge.calendar",
+                column: 14,
+                row: 0,
+                columnSpan: 6,
+                rowSpan: 4,
+                configuration: nil
+            ),
+            // Row 4-5: Weather (4x2), HA (6x2), Web (6x2)
+            WidgetPlacement(
+                id: UUID(),
+                widgetTypeID: "com.ledge.weather",
+                column: 0,
+                row: 4,
                 columnSpan: 4,
                 rowSpan: 2,
                 configuration: nil
             ),
             WidgetPlacement(
                 id: UUID(),
-                widgetTypeID: "com.ledge.calendar",
-                column: 7,
-                row: 0,
-                columnSpan: 3,
-                rowSpan: 2,
-                configuration: nil
-            ),
-            // Row 2: Weather (2x1), HomeAssistant (3x1), Web (3x1)
-            WidgetPlacement(
-                id: UUID(),
-                widgetTypeID: "com.ledge.weather",
-                column: 0,
-                row: 2,
-                columnSpan: 2,
-                rowSpan: 1,
-                configuration: nil
-            ),
-            WidgetPlacement(
-                id: UUID(),
                 widgetTypeID: "com.ledge.homeassistant",
-                column: 3,
-                row: 2,
-                columnSpan: 3,
-                rowSpan: 1,
+                column: 6,
+                row: 4,
+                columnSpan: 6,
+                rowSpan: 2,
                 configuration: nil
             ),
             WidgetPlacement(
                 id: UUID(),
                 widgetTypeID: "com.ledge.web",
-                column: 7,
-                row: 2,
-                columnSpan: 3,
-                rowSpan: 1,
+                column: 14,
+                row: 4,
+                columnSpan: 6,
+                rowSpan: 2,
                 configuration: nil
             ),
         ]

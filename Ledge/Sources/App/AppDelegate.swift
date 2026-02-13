@@ -47,25 +47,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         displayManager.detectXenonEdge()
 
         if displayManager.xeneonScreen != nil {
-            displayManager.showPanel()
+            // Determine which permissions active widgets need. Request them
+            // upfront so system dialogs are dismissed before the fullscreen
+            // transition — this prevents dialogs from interfering with the
+            // menu-bar-hiding fullscreen helper.
+            let requiredPerms = requiredWidgetPermissions()
 
-            // Set the dashboard content with the grid renderer.
-            // Only pass ThemeManager via environment — DashboardView observes it
-            // directly and pushes the resolved theme to children, so theme changes
-            // propagate live even though the NSHostingView is created once.
-            let dashboardView = DashboardView(
-                layoutManager: layoutManager,
-                configStore: configStore,
-                registry: WidgetRegistry.shared
-            )
-            .environmentObject(displayManager)
-            .environment(themeManager)
-            displayManager.setPanelContent(dashboardView)
+            displayManager.showPanelWhenReady(requiredPermissions: requiredPerms) { [weak self] in
+                guard let self else { return }
 
-            // Touch remapper disabled for now — re-enable when testing on hardware
-            // displayManager.startTouchRemapper()
+                let dashboardView = DashboardView(
+                    layoutManager: self.layoutManager,
+                    configStore: self.configStore,
+                    registry: WidgetRegistry.shared
+                )
+                .environmentObject(self.displayManager)
+                .environment(self.themeManager)
+                self.displayManager.setPanelContent(dashboardView)
 
-            logger.info("Panel displayed on Xeneon Edge")
+                // Touch remapper disabled for now — re-enable when testing on hardware
+                // self.displayManager.startTouchRemapper()
+
+                self.logger.info("Panel displayed on Xeneon Edge")
+            }
         } else {
             logger.warning("Xeneon Edge not found on launch — panel not shown")
         }
@@ -120,7 +124,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Find the settings window created by the SwiftUI Window scene.
         // It's the titled, non-panel window.
         for window in NSApp.windows {
-            if window.styleMask.contains(.titled) && !(window is LedgePanel) {
+            if window.styleMask.contains(.titled)
+                && !(window is LedgePanel)
+                && !(window is FullscreenHelperWindow) {
                 window.makeKeyAndOrderFront(nil)
                 return
             }
@@ -139,7 +145,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             guard let window = notification.object as? NSWindow,
                   window.styleMask.contains(.titled),
-                  !(window is LedgePanel) else { return }
+                  !(window is LedgePanel),
+                  !(window is FullscreenHelperWindow) else { return }
             self?.logger.info("Settings window closed — hiding from CMD+TAB")
             // Delay slightly to let the window fully close
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -156,7 +163,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             guard let window = notification.object as? NSWindow,
                   window.styleMask.contains(.titled),
-                  !(window is LedgePanel) else { return }
+                  !(window is LedgePanel),
+                  !(window is FullscreenHelperWindow) else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self?.updateActivationPolicy()
             }
@@ -169,6 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hasVisibleSettingsWindow = NSApp.windows.contains { window in
             window.styleMask.contains(.titled)
             && !(window is LedgePanel)
+            && !(window is FullscreenHelperWindow)
             && window.isVisible
             && !window.isMiniaturized
         }
@@ -190,5 +199,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Permission Helpers
+
+    /// Collect the set of permissions required by widgets in the active layout.
+    private func requiredWidgetPermissions() -> Set<WidgetPermission> {
+        var perms = Set<WidgetPermission>()
+        for placement in layoutManager.activeLayout.placements {
+            if let descriptor = WidgetRegistry.shared.registeredTypes[placement.widgetTypeID] {
+                perms.formUnion(descriptor.requiredPermissions)
+            }
+        }
+        return perms
     }
 }

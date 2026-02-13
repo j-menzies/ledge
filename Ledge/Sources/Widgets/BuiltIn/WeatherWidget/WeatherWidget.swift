@@ -25,8 +25,8 @@ struct WeatherWidget {
         displayName: "Weather",
         description: "Current conditions and forecast",
         iconSystemName: "cloud.sun",
-        minimumSize: .twoByOne,
-        defaultSize: .twoByTwo,
+        minimumSize: .threeByTwo,
+        defaultSize: .fourByThree,
         maximumSize: .fourByThree,
         defaultConfiguration: try? JSONEncoder().encode(Config()),
         viewFactory: { instanceID, configStore in
@@ -34,7 +34,8 @@ struct WeatherWidget {
         },
         settingsFactory: { instanceID, configStore in
             AnyView(WeatherSettingsView(instanceID: instanceID, configStore: configStore))
-        }
+        },
+        requiredPermissions: [.location]
     )
 }
 
@@ -119,7 +120,7 @@ struct WeatherWidgetView: View {
         VStack(spacing: 10) {
             Spacer()
 
-            // Current conditions
+            // Current conditions + details
             HStack(spacing: 16) {
                 Image(systemName: OpenMeteoClient.sfSymbol(for: weather.weatherCode, isDay: weather.isDay))
                     .font(.system(size: 52))
@@ -142,14 +143,13 @@ struct WeatherWidgetView: View {
                 }
 
                 Spacer()
-            }
-            .padding(.horizontal, 16)
 
-            // Details
-            HStack(spacing: 20) {
-                detailItem(icon: "thermometer", label: "Feels", value: temperatureString(weather.apparentTemperature))
-                detailItem(icon: "humidity", label: "Humidity", value: "\(weather.humidity)%")
-                detailItem(icon: "wind", label: "Wind", value: String(format: "%.0f km/h", weather.windSpeed))
+                // Details stacked vertically on the right
+                VStack(alignment: .trailing, spacing: 8) {
+                    detailItem(icon: "thermometer", label: "Feels", value: temperatureString(weather.apparentTemperature))
+                    detailItem(icon: "humidity", label: "Humidity", value: "\(weather.humidity)%")
+                    detailItem(icon: "wind", label: "Wind", value: String(format: "%.0f km/h", weather.windSpeed))
+                }
             }
             .padding(.horizontal, 16)
 

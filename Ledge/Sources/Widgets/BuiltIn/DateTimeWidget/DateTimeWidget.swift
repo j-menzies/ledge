@@ -20,9 +20,9 @@ struct DateTimeWidget {
         displayName: "Date & Time",
         description: "Displays current date and time with configurable format",
         iconSystemName: "clock",
-        minimumSize: .twoByOne,
-        defaultSize: .twoByTwo,
-        maximumSize: .fourByThree,
+        minimumSize: .threeByTwo,
+        defaultSize: .fourByFour,
+        maximumSize: .eightBySix,
         defaultConfiguration: try? JSONEncoder().encode(Config()),
         viewFactory: { instanceID, configStore in
             AnyView(DateTimeWidgetView(instanceID: instanceID, configStore: configStore))

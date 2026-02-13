@@ -96,6 +96,37 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
         runAppleScriptFire("tell application \"Spotify\" to set sound volume to \(clamped)")
     }
 
+    /// Set the player position (seek) to the given number of seconds.
+    func setPosition(_ seconds: Double) {
+        let clamped = max(0, seconds)
+        runAppleScriptFire("tell application \"Spotify\" to set player position to \(clamped)")
+    }
+
+    /// Skip forward by the given number of seconds.
+    func skipForward(_ seconds: Double = 10) {
+        let script = """
+        tell application "Spotify"
+            set newPos to (player position + \(seconds))
+            set dur to (duration of current track) / 1000
+            if newPos > dur then set newPos to dur
+            set player position to newPos
+        end tell
+        """
+        runAppleScriptFire(script)
+    }
+
+    /// Skip backward by the given number of seconds.
+    func skipBackward(_ seconds: Double = 10) {
+        let script = """
+        tell application "Spotify"
+            set newPos to (player position - \(seconds))
+            if newPos < 0 then set newPos to 0
+            set player position to newPos
+        end tell
+        """
+        runAppleScriptFire(script)
+    }
+
     /// Bring Spotify to the foreground.
     func activateSpotify() {
         runAppleScriptFire("tell application \"Spotify\" to activate")

@@ -1,7 +1,14 @@
 import AppKit
 import SwiftUI
 import Combine
+import AVFoundation
+import CoreLocation
+import EventKit
 import os.log
+
+/// Marker subclass for the fullscreen helper window.
+/// Used to exclude it from window enumeration in AppDelegate.
+class FullscreenHelperWindow: NSWindow {}
 
 /// Manages detection of the Xeneon Edge display and the lifecycle of the LedgePanel.
 ///
@@ -23,6 +30,9 @@ class DisplayManager: ObservableObject {
 
     /// Status message for the settings UI.
     @Published private(set) var statusMessage: String = "Searching for Xeneon Edge..."
+
+    /// Whether the panel is waiting for widget permissions before rendering.
+    @Published private(set) var permissionGateActive: Bool = false
 
     // MARK: - Configuration
 
@@ -117,9 +127,15 @@ class DisplayManager: ObservableObject {
     /// A helper window that enters macOS native fullscreen on the Edge display.
     /// This creates a fullscreen Space which auto-hides the menu bar per-display.
     /// The LedgePanel (with .fullScreenAuxiliary) renders on top of it.
-    private var fullscreenHelper: NSWindow?
+    private var fullscreenHelper: FullscreenHelperWindow?
     /// Observer for fullscreen entry to show the panel once the Space is ready.
     private var fullscreenObserver: Any?
+    /// Permission gate: timer, retained objects, and completion for pre-panel permission requests.
+    private var permissionGateTimer: Timer?
+    private var gateLocationManager: CLLocationManager?
+    private var gateEventStore: EKEventStore?
+    private var gatedPermissions: Set<WidgetPermission> = []
+    private var onPermissionsResolved: (() -> Void)?
 
     // MARK: - Lifecycle
 
@@ -188,10 +204,20 @@ class DisplayManager: ObservableObject {
         // If "Displays have separate Spaces" is on, secondary displays have their own
         // menu bar. Use a fullscreen helper window to auto-hide it — this mimics what
         // Safari/Chrome do when entering fullscreen on a secondary display.
+        // IMPORTANT: The panel must be shown AFTER the helper finishes entering
+        // fullscreen, otherwise the menu bar won't auto-hide.
         if NSScreen.screensHaveSeparateSpaces {
-            ensureFullscreenHelper(on: screen)
+            ensureFullscreenHelper(on: screen) { [weak self] in
+                self?.revealPanel(on: screen)
+            }
+        } else {
+            revealPanel(on: screen)
         }
+    }
 
+    /// Actually make the panel visible. Called directly (no fullscreen helper needed)
+    /// or after the fullscreen helper finishes its transition.
+    private func revealPanel(on screen: NSScreen) {
         panel?.makeKeyAndOrderFront(nil)
         isActive = true
         statusMessage = "Active on \(screen.localizedName)"
@@ -413,6 +439,106 @@ class DisplayManager: ObservableObject {
         }
     }
 
+    // MARK: - Widget Permission Gate
+    //
+    // Before showing the panel, check if active widgets need permissions that
+    // would trigger system dialogs (camera, location, calendar). Request them
+    // upfront so dialogs are dismissed before the fullscreen transition starts.
+
+    /// Show the panel only after all required widget permissions are resolved.
+    ///
+    /// "Resolved" means the user has responded to the dialog (granted or denied).
+    /// We don't block on denied — the widget degrades gracefully. We only wait
+    /// for `.notDetermined` permissions that would produce a system dialog.
+    func showPanelWhenReady(requiredPermissions: Set<WidgetPermission>, then completion: @escaping () -> Void) {
+        guard xeneonScreen != nil else {
+            logger.error("Cannot show panel: no Xeneon Edge screen detected")
+            return
+        }
+
+        // Filter to permissions the user hasn't responded to yet
+        let unresolved = requiredPermissions.filter { !isPermissionResolved($0) }
+
+        if unresolved.isEmpty {
+            logger.info("All widget permissions resolved — proceeding with panel")
+            permissionGateActive = false
+            showPanel()
+            completion()
+        } else {
+            logger.info("Waiting for \(unresolved.count) permission(s): \(unresolved.map(\.rawValue).joined(separator: ", "))")
+            permissionGateActive = true
+            gatedPermissions = unresolved
+            statusMessage = "Waiting for permissions..."
+            onPermissionsResolved = { [weak self] in
+                self?.permissionGateActive = false
+                self?.showPanel()
+                completion()
+            }
+
+            // Request each unresolved permission (triggers system dialogs)
+            for perm in unresolved {
+                requestPermission(perm)
+            }
+
+            // Poll until all dialogs are dismissed
+            beginPermissionGatePolling()
+        }
+    }
+
+    /// Check if a permission has been resolved (user responded — granted or denied).
+    private func isPermissionResolved(_ permission: WidgetPermission) -> Bool {
+        switch permission {
+        case .camera:
+            return AVCaptureDevice.authorizationStatus(for: .video) != .notDetermined
+        case .location:
+            return CLLocationManager().authorizationStatus != .notDetermined
+        case .calendar:
+            return EKEventStore.authorizationStatus(for: .event) != .notDetermined
+        }
+    }
+
+    /// Request a specific permission (shows system dialog if not determined).
+    private func requestPermission(_ permission: WidgetPermission) {
+        switch permission {
+        case .camera:
+            AVCaptureDevice.requestAccess(for: .video) { _ in }
+        case .location:
+            if gateLocationManager == nil {
+                gateLocationManager = CLLocationManager()
+            }
+            gateLocationManager?.requestWhenInUseAuthorization()
+        case .calendar:
+            if gateEventStore == nil {
+                gateEventStore = EKEventStore()
+            }
+            gateEventStore?.requestFullAccessToEvents { _, _ in }
+        }
+    }
+
+    private func beginPermissionGatePolling() {
+        permissionGateTimer?.invalidate()
+        permissionGateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkPermissionGate()
+            }
+        }
+    }
+
+    private func checkPermissionGate() {
+        let stillUnresolved = gatedPermissions.filter { !isPermissionResolved($0) }
+
+        if stillUnresolved.isEmpty {
+            logger.info("All widget permissions resolved — showing panel")
+            permissionGateTimer?.invalidate()
+            permissionGateTimer = nil
+            gateLocationManager = nil
+            gateEventStore = nil
+            gatedPermissions = []
+            onPermissionsResolved?()
+            onPermissionsResolved = nil
+        }
+    }
+
     // MARK: - Fullscreen Helper (Menu Bar Hiding)
 
     /// Create a helper window that enters native macOS fullscreen on the Edge display.
@@ -423,13 +549,23 @@ class DisplayManager: ObservableObject {
     ///
     /// The LedgePanel (with `.fullScreenAuxiliary` + `.canJoinAllSpaces`) renders on top
     /// of the fullscreen helper, receiving all touch/mouse input as before.
-    private func ensureFullscreenHelper(on screen: NSScreen) {
-        guard fullscreenHelper == nil else { return }
+    private func ensureFullscreenHelper(on screen: NSScreen, completion: @escaping () -> Void) {
+        // If helper already exists and is in fullscreen, proceed immediately
+        if let helper = fullscreenHelper, helper.styleMask.contains(.fullScreen) {
+            completion()
+            return
+        }
+
+        // If helper exists but mid-transition, wait for it
+        if fullscreenHelper != nil {
+            observeFullscreenEntry(completion: completion)
+            return
+        }
 
         // The helper needs .titled for toggleFullScreen to work. fullSizeContentView +
         // transparent titlebar makes the titlebar invisible. The window is entirely black
         // and serves only to create the fullscreen Space.
-        let helper = NSWindow(
+        let helper = FullscreenHelperWindow(
             contentRect: screen.frame,
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
@@ -446,11 +582,46 @@ class DisplayManager: ObservableObject {
 
         fullscreenHelper = helper
 
+        // Observe fullscreen entry BEFORE triggering the transition
+        observeFullscreenEntry(completion: completion)
+
         // Show and enter fullscreen
         helper.orderFront(nil)
         helper.toggleFullScreen(nil)
 
         logger.info("Fullscreen helper created — entering fullscreen on \(screen.localizedName)")
+    }
+
+    /// Wait for the fullscreen helper to finish entering fullscreen, then call completion.
+    private func observeFullscreenEntry(completion: @escaping () -> Void) {
+        // Clean up any previous observer
+        if let obs = fullscreenObserver {
+            NotificationCenter.default.removeObserver(obs)
+            fullscreenObserver = nil
+        }
+
+        fullscreenObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEnterFullScreenNotification,
+            object: fullscreenHelper,
+            queue: .main
+        ) { [weak self] _ in
+            if let obs = self?.fullscreenObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self?.fullscreenObserver = nil
+            }
+            completion()
+        }
+
+        // Fallback: if the notification never fires, show after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard self?.fullscreenObserver != nil else { return }
+            if let obs = self?.fullscreenObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self?.fullscreenObserver = nil
+            }
+            self?.logger.warning("Fullscreen entry timed out — showing panel anyway")
+            completion()
+        }
     }
 
     /// Exit fullscreen and clean up the helper window.

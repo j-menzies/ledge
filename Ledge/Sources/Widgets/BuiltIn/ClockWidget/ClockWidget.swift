@@ -13,9 +13,9 @@ struct ClockWidget {
         displayName: "Clock",
         description: "Displays the current time",
         iconSystemName: "clock",
-        minimumSize: .twoByOne,
-        defaultSize: .twoByTwo,
-        maximumSize: .fourByThree,
+        minimumSize: .twoByTwo,
+        defaultSize: .fourByFour,
+        maximumSize: .sixBySix,
         defaultConfiguration: nil,
         viewFactory: { _, _ in
             AnyView(ClockWidgetView())

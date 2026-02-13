@@ -16,16 +16,17 @@ struct CalendarWidget {
         displayName: "Calendar",
         description: "Upcoming events from your calendars",
         iconSystemName: "calendar",
-        minimumSize: .twoByTwo,
-        defaultSize: .threeByTwo,
-        maximumSize: .fiveByThree,
+        minimumSize: .fourByThree,
+        defaultSize: .sixByFour,
+        maximumSize: .eightBySix,
         defaultConfiguration: try? JSONEncoder().encode(Config()),
         viewFactory: { instanceID, configStore in
             AnyView(CalendarWidgetView(instanceID: instanceID, configStore: configStore))
         },
         settingsFactory: { instanceID, configStore in
             AnyView(CalendarSettingsView(instanceID: instanceID, configStore: configStore))
-        }
+        },
+        requiredPermissions: [.calendar]
     )
 }
 

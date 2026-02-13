@@ -19,9 +19,9 @@ struct HomeAssistantWidget {
         displayName: "Home Assistant",
         description: "Control smart home entities",
         iconSystemName: "house",
-        minimumSize: .twoByTwo,
-        defaultSize: .threeByTwo,
-        maximumSize: .fourByThree,
+        minimumSize: .fourByTwo,
+        defaultSize: .sixByThree,
+        maximumSize: .tenByFour,
         defaultConfiguration: try? JSONEncoder().encode(Config()),
         viewFactory: { instanceID, configStore in
             AnyView(HomeAssistantWidgetView(instanceID: instanceID, configStore: configStore))

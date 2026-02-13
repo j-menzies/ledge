@@ -55,6 +55,9 @@ class WidgetRegistry {
         register(WeatherWidget.descriptor)
         register(WebWidget.descriptor)
         register(HomeAssistantWidget.descriptor)
+        register(SystemPerformanceWidget.descriptor)
+        register(SystemAudioWidget.descriptor)
+        register(GoogleMeetWidget.descriptor)
         logger.info("Registered \(self.registeredTypes.count) built-in widget(s)")
     }
 }

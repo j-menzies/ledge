@@ -7,5 +7,13 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Ledge monitors camera status to show an indicator in the System Audio widget.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Ledge uses your location to show local weather conditions.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Ledge displays your upcoming calendar events in the Calendar widget.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Ledge communicates with Google Chrome to control Google Meet meetings.</string>
 </dict>
 </plist>

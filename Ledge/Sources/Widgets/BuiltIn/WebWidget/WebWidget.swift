@@ -18,9 +18,9 @@ struct WebWidget {
         displayName: "Web",
         description: "Embed any webpage",
         iconSystemName: "globe",
-        minimumSize: .twoByTwo,
-        defaultSize: .threeByTwo,
-        maximumSize: .tenByThree,
+        minimumSize: .fourByThree,
+        defaultSize: .sixByFour,
+        maximumSize: .twentyBySix,
         defaultConfiguration: try? JSONEncoder().encode(Config()),
         viewFactory: { instanceID, configStore in
             AnyView(WebWidgetView(instanceID: instanceID, configStore: configStore))

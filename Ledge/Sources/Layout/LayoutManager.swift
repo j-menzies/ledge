@@ -29,12 +29,26 @@ class LayoutManager {
         // Load active layout or use default
         if let data = try? Data(contentsOf: activeLayoutFile),
            let layout = try? JSONDecoder().decode(WidgetLayout.self, from: data) {
-            activeLayout = layout
+            // Migrate old layouts (10x3) to the new denser grid (20x6)
+            if layout.columns < 20 {
+                activeLayout = Self.migrateLayout(layout)
+                logger.info("Migrated layout '\(layout.name)' from \(layout.columns)x\(layout.rows) to \(self.activeLayout.columns)x\(self.activeLayout.rows)")
+            } else {
+                activeLayout = layout
+            }
         } else {
             activeLayout = WidgetLayout.defaultLayout
         }
 
         loadSavedLayouts()
+
+        // Migrate any saved layouts that are still on the old grid
+        savedLayouts = savedLayouts.map { layout in
+            if layout.columns < 20 {
+                return Self.migrateLayout(layout)
+            }
+            return layout
+        }
 
         // Persist immediately so widget instance UUIDs are stable across launches.
         // Without this, the default layout's UUIDs would be regenerated on every
@@ -114,6 +128,31 @@ class LayoutManager {
         }
         savedLayouts.removeAll { $0.id == id }
         saveSavedLayouts()
+    }
+
+    // MARK: - Migration
+
+    /// Migrate a layout from the old grid density to 20x6 by doubling all coordinates.
+    /// Preserves the exact same visual arrangement while enabling finer-grained sizing.
+    private static func migrateLayout(_ layout: WidgetLayout) -> WidgetLayout {
+        let scale = 2
+        return WidgetLayout(
+            id: layout.id,
+            name: layout.name,
+            columns: layout.columns * scale,
+            rows: layout.rows * scale,
+            placements: layout.placements.map { p in
+                WidgetPlacement(
+                    id: p.id,
+                    widgetTypeID: p.widgetTypeID,
+                    column: p.column * scale,
+                    row: p.row * scale,
+                    columnSpan: p.columnSpan * scale,
+                    rowSpan: p.rowSpan * scale,
+                    configuration: p.configuration
+                )
+            }
+        )
     }
 
     // MARK: - Persistence
