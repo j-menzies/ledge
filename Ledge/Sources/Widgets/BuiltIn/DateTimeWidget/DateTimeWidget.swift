@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import EventKit
 
 /// Enhanced date/time widget with configurable display options.
 ///
@@ -13,6 +14,7 @@ struct DateTimeWidget {
         var showDate: Bool = true
         var dateFormat: String = "EEEE, d MMMM"
         var timezone: String? = nil  // nil = local
+        var tintWithCalendarColor: Bool = true
     }
 
     static let descriptor = WidgetDescriptor(
@@ -42,8 +44,12 @@ struct DateTimeWidgetView: View {
 
     @State private var currentTime = Date()
     @State private var config = DateTimeWidget.Config()
+    @State private var currentEventColor: Color? = nil
+    @State private var currentEventTitle: String? = nil
 
+    private let eventStore = EKEventStore()
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    private let eventCheckTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GeometryReader { geometry in
@@ -57,15 +63,16 @@ struct DateTimeWidgetView: View {
                 // Time
                 Text(timeString)
                     .font(.system(size: timeFontSize, weight: .thin, design: .monospaced))
-                    .foregroundColor(theme.primaryText)
+                    .foregroundColor(currentEventColor ?? theme.primaryText)
                     .minimumScaleFactor(0.3)
                     .lineLimit(1)
+                    .animation(.easeInOut(duration: 0.6), value: currentEventColor != nil)
 
-                // Date
+                // Date (or current event name when in a meeting)
                 if config.showDate {
-                    Text(dateString)
+                    Text(currentEventTitle ?? dateString)
                         .font(.system(size: dateFontSize, weight: .regular))
-                        .foregroundColor(theme.secondaryText)
+                        .foregroundColor(currentEventColor?.opacity(0.7) ?? theme.secondaryText)
                         .lineLimit(1)
                 }
 
@@ -73,8 +80,12 @@ struct DateTimeWidgetView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .onAppear { loadConfig() }
+        .onAppear {
+            loadConfig()
+            checkCurrentEvent()
+        }
         .onReceive(timer) { time in currentTime = time }
+        .onReceive(eventCheckTimer) { _ in checkCurrentEvent() }
         .onReceive(configStore.configDidChange) { changedID in
             if changedID == instanceID { loadConfig() }
         }
@@ -103,6 +114,37 @@ struct DateTimeWidgetView: View {
             config = saved
         }
     }
+
+    /// Check if the user is currently in a calendar event and tint accordingly.
+    /// Only activates if calendar permission was already granted (e.g. by the Calendar widget).
+    private func checkCurrentEvent() {
+        guard config.tintWithCalendarColor else {
+            currentEventColor = nil
+            currentEventTitle = nil
+            return
+        }
+
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
+            currentEventColor = nil
+            currentEventTitle = nil
+            return
+        }
+
+        let now = Date()
+        let soon = Calendar.current.date(byAdding: .minute, value: 1, to: now)!
+        let predicate = eventStore.predicateForEvents(withStart: now, end: soon, calendars: nil)
+        let events = eventStore.events(matching: predicate)
+
+        // Find the first non-all-day event currently happening
+        if let event = events.first(where: { !$0.isAllDay && $0.startDate <= now && $0.endDate > now }),
+           let cgColor = event.calendar?.cgColor {
+            currentEventColor = Color(cgColor: cgColor)
+            currentEventTitle = event.title
+        } else {
+            currentEventColor = nil
+            currentEventTitle = nil
+        }
+    }
 }
 
 // MARK: - Settings
@@ -123,12 +165,15 @@ struct DateTimeSettingsView: View {
                 TextField("Date format", text: $config.dateFormat)
                     .textFieldStyle(.roundedBorder)
             }
+
+            Toggle("Tint with calendar event color", isOn: $config.tintWithCalendarColor)
         }
         .onAppear { loadConfig() }
         .onChange(of: config.use24Hour) { _, _ in saveConfig() }
         .onChange(of: config.showSeconds) { _, _ in saveConfig() }
         .onChange(of: config.showDate) { _, _ in saveConfig() }
         .onChange(of: config.dateFormat) { _, _ in saveConfig() }
+        .onChange(of: config.tintWithCalendarColor) { _, _ in saveConfig() }
     }
 
     private func loadConfig() {

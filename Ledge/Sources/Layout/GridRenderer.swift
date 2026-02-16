@@ -35,8 +35,15 @@ struct GridMetrics {
 ///
 /// Uses a GeometryReader to get the available size, calculates GridMetrics,
 /// then positions each WidgetContainer at its computed frame.
+///
+/// Supports three background modes:
+/// - Theme colour (default solid background from the active theme)
+/// - Background image (custom wallpaper behind the widget grid)
+///
+/// Widget backgrounds can independently be solid, blur, or transparent.
 struct GridRenderer: View {
     @Environment(\.theme) private var theme
+    @Environment(ThemeManager.self) private var themeManager
     let layout: WidgetLayout
     let configStore: WidgetConfigStore
     let registry: WidgetRegistry
@@ -55,8 +62,8 @@ struct GridRenderer: View {
             )
 
             ZStack(alignment: .topLeading) {
-                // Background
-                theme.dashboardBackground
+                // Background layer
+                dashboardBackground(size: geometry.size)
 
                 // Widgets
                 ForEach(layout.placements) { placement in
@@ -68,6 +75,44 @@ struct GridRenderer: View {
                     )
                     .frame(width: frame.width, height: frame.height)
                     .offset(x: frame.origin.x, y: frame.origin.y)
+                }
+            }
+            .environment(\.widgetBackgroundStyle, themeManager.widgetBackgroundStyle)
+        }
+    }
+
+    @ViewBuilder
+    private func dashboardBackground(size: CGSize) -> some View {
+        let bgStyle = themeManager.widgetBackgroundStyle
+
+        switch themeManager.dashboardBackgroundMode {
+        case .themeColor:
+            if bgStyle == .solid {
+                // Solid mode: theme colour fills everything (gaps are solid)
+                theme.dashboardBackground
+            } else {
+                // Blur/Transparent mode with no image: clear background
+                // so the macOS desktop wallpaper shows through the gaps.
+                // The panel must also be non-opaque for this to work.
+                Color.clear
+            }
+
+        case .image:
+            if let nsImage = themeManager.backgroundImage {
+                // Background image fills the entire dashboard area.
+                // Visible through gaps in all modes; visible through
+                // widgets themselves in Blur (frosted) and Transparent modes.
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+            } else {
+                // No image loaded — fall back to the theme colour or clear
+                if bgStyle == .solid {
+                    theme.dashboardBackground
+                } else {
+                    Color.clear
                 }
             }
         }

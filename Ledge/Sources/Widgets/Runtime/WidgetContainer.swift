@@ -2,11 +2,12 @@ import SwiftUI
 
 /// SwiftUI wrapper that renders a single widget within the grid.
 ///
-/// Provides the standard widget chrome: semi-transparent background,
+/// Provides the standard widget chrome: background (solid, blur, or transparent),
 /// rounded corners, subtle border. Shows an error placeholder for
 /// unknown or failed widget types.
 struct WidgetContainer: View {
     @Environment(\.theme) private var theme
+    @Environment(\.widgetBackgroundStyle) private var backgroundStyle
     let placement: WidgetPlacement
     let configStore: WidgetConfigStore
     let registry: WidgetRegistry
@@ -19,12 +20,28 @@ struct WidgetContainer: View {
                 errorPlaceholder
             }
         }
-        .background(theme.widgetBackground)
+        .background(widgetBackground)
         .clipShape(RoundedRectangle(cornerRadius: theme.widgetCornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: theme.widgetCornerRadius)
                 .strokeBorder(theme.widgetBorderColor, lineWidth: theme.widgetBorderWidth)
         )
+    }
+
+    @ViewBuilder
+    private var widgetBackground: some View {
+        switch backgroundStyle {
+        case .solid:
+            theme.widgetBackground
+        case .blur:
+            VisualEffectBlur(
+                material: .hudWindow,
+                blendingMode: .behindWindow,
+                state: .active
+            )
+        case .transparent:
+            Color.clear
+        }
     }
 
     private var errorPlaceholder: some View {
@@ -40,5 +57,18 @@ struct WidgetContainer: View {
                 .foregroundColor(theme.tertiaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Widget Background Style Environment Key
+
+private struct WidgetBackgroundStyleKey: EnvironmentKey {
+    static let defaultValue: WidgetBackgroundStyle = .solid
+}
+
+extension EnvironmentValues {
+    var widgetBackgroundStyle: WidgetBackgroundStyle {
+        get { self[WidgetBackgroundStyleKey.self] }
+        set { self[WidgetBackgroundStyleKey.self] = newValue }
     }
 }

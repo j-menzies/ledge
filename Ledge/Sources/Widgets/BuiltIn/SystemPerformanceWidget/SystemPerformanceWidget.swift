@@ -1,19 +1,20 @@
 import SwiftUI
 import Combine
 
-/// System performance widget showing CPU, Memory, and Disk usage with sparkline graphs.
+/// System performance widget showing CPU, Memory, Disk usage, and Network bandwidth.
 struct SystemPerformanceWidget {
 
     struct Config: Codable, Equatable {
         var showCPU: Bool = true
         var showMemory: Bool = true
         var showDisk: Bool = true
+        var showNetwork: Bool = true
     }
 
     static let descriptor = WidgetDescriptor(
         typeID: "com.ledge.system-performance",
         displayName: "System Performance",
-        description: "CPU, Memory & Disk usage with graphs",
+        description: "CPU, Memory, Disk & Network bandwidth",
         iconSystemName: "gauge.with.dots.needle.33percent",
         minimumSize: .fourByThree,
         defaultSize: .sixByFour,
@@ -41,6 +42,8 @@ struct SystemPerformanceWidgetView: View {
     @State private var metrics = SystemPerformanceProvider.Metrics()
     @State private var cpuHistory: [Double] = []
     @State private var memHistory: [Double] = []
+    @State private var downloadHistory: [Double] = []
+    @State private var uploadHistory: [Double] = []
 
     private let maxHistory = 60
     private let pollTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -104,6 +107,16 @@ struct SystemPerformanceWidgetView: View {
                     theme: theme
                 )
             }
+
+            if config.showNetwork {
+                NetworkCard(
+                    downloadHistory: downloadHistory,
+                    uploadHistory: uploadHistory,
+                    currentDown: metrics.networkDownBytesPerSec,
+                    currentUp: metrics.networkUpBytesPerSec,
+                    theme: theme
+                )
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -139,6 +152,19 @@ struct SystemPerformanceWidgetView: View {
                     color: diskColor,
                     theme: theme
                 )
+            }
+            if config.showNetwork {
+                VStack(spacing: 4) {
+                    Image(systemName: "wifi")
+                        .font(.system(size: 18))
+                        .foregroundColor(.cyan)
+                    Text(formatRate(metrics.networkDownBytesPerSec))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.cyan)
+                    Text(formatRate(metrics.networkUpBytesPerSec))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.orange)
+                }
             }
         }
         .padding(12)
@@ -179,6 +205,12 @@ struct SystemPerformanceWidgetView: View {
 
                 memHistory.append(m.memoryPercent / 100.0)
                 if memHistory.count > maxHistory { memHistory.removeFirst() }
+
+                downloadHistory.append(m.networkDownBytesPerSec)
+                if downloadHistory.count > maxHistory { downloadHistory.removeFirst() }
+
+                uploadHistory.append(m.networkUpBytesPerSec)
+                if uploadHistory.count > maxHistory { uploadHistory.removeFirst() }
             }
         }
     }
@@ -234,6 +266,218 @@ private struct MetricCard: View {
                 SparklineView(data: history, color: color)
                     .frame(height: 30)
             }
+        }
+    }
+}
+
+// MARK: - Network Card
+
+private struct NetworkCard: View {
+    let downloadHistory: [Double]
+    let uploadHistory: [Double]
+    let currentDown: Double
+    let currentUp: Double
+    let theme: LedgeTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Header with current rates
+            HStack {
+                Image(systemName: "wifi")
+                    .font(.system(size: 14))
+                    .foregroundColor(.cyan)
+                    .frame(width: 18)
+                Text("Network")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(theme.secondaryText)
+                Spacer()
+                HStack(spacing: 10) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.cyan)
+                        Text(formatRate(currentDown))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.cyan)
+                    }
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.orange)
+                        Text(formatRate(currentUp))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+
+            // Bidirectional graph
+            GeometryReader { geo in
+                let isVertical = geo.size.height > geo.size.width
+                BandwidthGraphView(
+                    downloadHistory: downloadHistory,
+                    uploadHistory: uploadHistory,
+                    isVertical: isVertical,
+                    theme: theme
+                )
+            }
+            .frame(minHeight: 50)
+        }
+    }
+}
+
+// MARK: - Bandwidth Graph (bidirectional, orientation-aware)
+
+private struct BandwidthGraphView: View {
+    let downloadHistory: [Double]
+    let uploadHistory: [Double]
+    let isVertical: Bool
+    let theme: LedgeTheme
+
+    private let downloadColor: Color = .cyan
+    private let uploadColor: Color = .orange
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            Canvas { context, size in
+                let maxVal = max(
+                    downloadHistory.max() ?? 0,
+                    uploadHistory.max() ?? 0,
+                    1024 // minimum 1 KB/s scale
+                )
+                let count = max(downloadHistory.count, uploadHistory.count)
+                guard count > 1 else { return }
+
+                if isVertical {
+                    drawVertical(context: context, size: size, maxVal: maxVal, count: count)
+                } else {
+                    drawHorizontal(context: context, size: size, maxVal: maxVal, count: count)
+                }
+            }
+
+            // Center line
+            if isVertical {
+                Path { path in
+                    path.move(to: CGPoint(x: w / 2, y: 0))
+                    path.addLine(to: CGPoint(x: w / 2, y: h))
+                }
+                .stroke(theme.primaryText.opacity(0.15), lineWidth: 0.5)
+            } else {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: h / 2))
+                    path.addLine(to: CGPoint(x: w, y: h / 2))
+                }
+                .stroke(theme.primaryText.opacity(0.15), lineWidth: 0.5)
+            }
+        }
+    }
+
+    // Horizontal: X=time, download above center, upload below center
+    private func drawHorizontal(context: GraphicsContext, size: CGSize, maxVal: Double, count: Int) {
+        let w = size.width
+        let h = size.height
+        let mid = h / 2
+
+        // Download (above center line)
+        if !downloadHistory.isEmpty {
+            var downFill = Path()
+            downFill.move(to: CGPoint(x: 0, y: mid))
+            for (i, val) in downloadHistory.enumerated() {
+                let x = w * Double(i) / Double(count - 1)
+                let y = mid - (mid * min(val / maxVal, 1.0))
+                downFill.addLine(to: CGPoint(x: x, y: y))
+            }
+            downFill.addLine(to: CGPoint(x: w * Double(downloadHistory.count - 1) / Double(count - 1), y: mid))
+            downFill.closeSubpath()
+            context.fill(downFill, with: .color(downloadColor.opacity(0.3)))
+
+            var downLine = Path()
+            for (i, val) in downloadHistory.enumerated() {
+                let x = w * Double(i) / Double(count - 1)
+                let y = mid - (mid * min(val / maxVal, 1.0))
+                if i == 0 { downLine.move(to: CGPoint(x: x, y: y)) }
+                else { downLine.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            context.stroke(downLine, with: .color(downloadColor), lineWidth: 1.5)
+        }
+
+        // Upload (below center line)
+        if !uploadHistory.isEmpty {
+            var upFill = Path()
+            upFill.move(to: CGPoint(x: 0, y: mid))
+            for (i, val) in uploadHistory.enumerated() {
+                let x = w * Double(i) / Double(count - 1)
+                let y = mid + (mid * min(val / maxVal, 1.0))
+                upFill.addLine(to: CGPoint(x: x, y: y))
+            }
+            upFill.addLine(to: CGPoint(x: w * Double(uploadHistory.count - 1) / Double(count - 1), y: mid))
+            upFill.closeSubpath()
+            context.fill(upFill, with: .color(uploadColor.opacity(0.3)))
+
+            var upLine = Path()
+            for (i, val) in uploadHistory.enumerated() {
+                let x = w * Double(i) / Double(count - 1)
+                let y = mid + (mid * min(val / maxVal, 1.0))
+                if i == 0 { upLine.move(to: CGPoint(x: x, y: y)) }
+                else { upLine.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            context.stroke(upLine, with: .color(uploadColor), lineWidth: 1.5)
+        }
+    }
+
+    // Vertical: Y=time (top to bottom), download right of center, upload left of center
+    private func drawVertical(context: GraphicsContext, size: CGSize, maxVal: Double, count: Int) {
+        let w = size.width
+        let h = size.height
+        let mid = w / 2
+
+        // Download (right of center)
+        if !downloadHistory.isEmpty {
+            var downFill = Path()
+            downFill.move(to: CGPoint(x: mid, y: 0))
+            for (i, val) in downloadHistory.enumerated() {
+                let y = h * Double(i) / Double(count - 1)
+                let x = mid + (mid * min(val / maxVal, 1.0))
+                downFill.addLine(to: CGPoint(x: x, y: y))
+            }
+            downFill.addLine(to: CGPoint(x: mid, y: h * Double(downloadHistory.count - 1) / Double(count - 1)))
+            downFill.closeSubpath()
+            context.fill(downFill, with: .color(downloadColor.opacity(0.3)))
+
+            var downLine = Path()
+            for (i, val) in downloadHistory.enumerated() {
+                let y = h * Double(i) / Double(count - 1)
+                let x = mid + (mid * min(val / maxVal, 1.0))
+                if i == 0 { downLine.move(to: CGPoint(x: x, y: y)) }
+                else { downLine.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            context.stroke(downLine, with: .color(downloadColor), lineWidth: 1.5)
+        }
+
+        // Upload (left of center)
+        if !uploadHistory.isEmpty {
+            var upFill = Path()
+            upFill.move(to: CGPoint(x: mid, y: 0))
+            for (i, val) in uploadHistory.enumerated() {
+                let y = h * Double(i) / Double(count - 1)
+                let x = mid - (mid * min(val / maxVal, 1.0))
+                upFill.addLine(to: CGPoint(x: x, y: y))
+            }
+            upFill.addLine(to: CGPoint(x: mid, y: h * Double(uploadHistory.count - 1) / Double(count - 1)))
+            upFill.closeSubpath()
+            context.fill(upFill, with: .color(uploadColor.opacity(0.3)))
+
+            var upLine = Path()
+            for (i, val) in uploadHistory.enumerated() {
+                let y = h * Double(i) / Double(count - 1)
+                let x = mid - (mid * min(val / maxVal, 1.0))
+                if i == 0 { upLine.move(to: CGPoint(x: x, y: y)) }
+                else { upLine.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            context.stroke(upLine, with: .color(uploadColor), lineWidth: 1.5)
         }
     }
 }
@@ -320,6 +564,15 @@ private struct SparklineView: View {
     }
 }
 
+// MARK: - Rate Formatting
+
+private func formatRate(_ bytesPerSec: Double) -> String {
+    if bytesPerSec < 1024 { return String(format: "%.0f B/s", bytesPerSec) }
+    if bytesPerSec < 1024 * 1024 { return String(format: "%.1f KB/s", bytesPerSec / 1024) }
+    if bytesPerSec < 1024 * 1024 * 1024 { return String(format: "%.1f MB/s", bytesPerSec / (1024 * 1024)) }
+    return String(format: "%.2f GB/s", bytesPerSec / (1024 * 1024 * 1024))
+}
+
 // MARK: - Settings
 
 struct SystemPerformanceSettingsView: View {
@@ -333,6 +586,7 @@ struct SystemPerformanceSettingsView: View {
             Toggle("Show CPU", isOn: $config.showCPU)
             Toggle("Show Memory", isOn: $config.showMemory)
             Toggle("Show Disk", isOn: $config.showDisk)
+            Toggle("Show Network", isOn: $config.showNetwork)
         }
         .onAppear { loadConfig() }
         .onChange(of: config) { _, _ in saveConfig() }

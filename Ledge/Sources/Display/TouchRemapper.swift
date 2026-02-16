@@ -4,10 +4,23 @@ import os.log
 
 /// Remaps touch input from the Xeneon Edge touchscreen to the correct display coordinates.
 ///
-/// macOS maps external touchscreen input to the primary display by default — there's
-/// no built-in way to associate a USB touch digitiser with a specific secondary display.
-/// This class uses a CGEventTap to intercept mouse events from the touchscreen and
-/// transform the coordinates to the Xeneon Edge's position in the global display space.
+/// macOS maps external USB touchscreen input to the primary display — there's no built-in
+/// way to associate a USB touch digitiser with a specific secondary display.
+///
+/// ## Direct Delivery Approach
+///
+/// This class intercepts ALL mouse events from the touchscreen via a CGEventTap and
+/// returns `nil` to completely suppress them from the system. It then constructs NSEvents
+/// with the correct Xeneon Edge coordinates and delivers them directly to the LedgePanel
+/// via `sendEvent()`.
+///
+/// Because the original events are fully suppressed and the synthetic NSEvents never
+/// enter the window server, this approach:
+/// - Does NOT move the cursor
+/// - Does NOT change window ordering or focus
+/// - Does NOT activate the Ledge application
+///
+/// The events exist only within the application — the OS never sees them.
 ///
 /// Requires Accessibility permissions (System Settings > Privacy & Security > Accessibility).
 ///
@@ -15,7 +28,11 @@ import os.log
 /// the system's event tap thread and cannot be confined to MainActor.
 nonisolated class TouchRemapper {
 
-    private let logger = Logger(subsystem: "com.ledge.app", category: "TouchRemapper")
+    let logger = Logger(subsystem: "com.ledge.app", category: "TouchRemapper")
+
+    /// The panel to deliver touch events to. Set by DisplayManager.
+    /// Weak to avoid retain cycles.
+    weak var panel: LedgePanel?
 
     /// The screen that the touchscreen should map to (the Xeneon Edge).
     private var targetScreen: NSScreen?
@@ -70,6 +87,17 @@ nonisolated class TouchRemapper {
     /// Parameters: device ID, original coordinates, remapped coordinates (nil if remapping failed).
     var onEventProcessed: ((_ deviceID: Int64, _ original: CGPoint, _ remapped: CGPoint?) -> Void)?
 
+    // MARK: - Touch Sequence State
+
+    /// Whether we're currently tracking a touch sequence (finger is down).
+    private var isTrackingTouch: Bool = false
+
+    /// Counter for throttling mouseDragged/mouseMoved logs.
+    private var moveLogCounter: Int = 0
+
+    /// Sequence counter — increments on each mouseDown for correlating log entries.
+    private var touchSequenceID: UInt64 = 0
+
     // MARK: - Setup
 
     /// Start the touch remapper targeting the given screen.
@@ -83,7 +111,8 @@ nonisolated class TouchRemapper {
             return
         }
 
-        // Create an event tap that intercepts mouse events
+        // Create an event tap that intercepts mouse events.
+        // Using .defaultTap (active filter) so we can suppress events by returning nil.
         let eventMask: CGEventMask = (
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseUp.rawValue) |
@@ -119,13 +148,16 @@ nonisolated class TouchRemapper {
         // Log display geometry in CG coordinates (matching CGEvent.location)
         let sourceCG = cgRect(for: NSScreen.screens.first ?? targetScreen)
         let targetCG = cgRect(for: targetScreen)
-        logger.info("Touch remapper started — targeting \(targetScreen.localizedName)")
-        logger.info("  Source (primary CG): origin=(\(Int(sourceCG.origin.x)),\(Int(sourceCG.origin.y))) size=\(Int(sourceCG.width))×\(Int(sourceCG.height))")
-        logger.info("  Target (edge CG):    origin=(\(Int(targetCG.origin.x)),\(Int(targetCG.origin.y))) size=\(Int(targetCG.width))×\(Int(targetCG.height))")
+        logger.notice("Touch remapper started — targeting \(targetScreen.localizedName)")
+        logger.notice("  Source (primary CG): origin=(\(Int(sourceCG.origin.x)),\(Int(sourceCG.origin.y))) size=\(Int(sourceCG.width))×\(Int(sourceCG.height))")
+        logger.notice("  Target (edge CG):    origin=(\(Int(targetCG.origin.x)),\(Int(targetCG.origin.y))) size=\(Int(targetCG.width))×\(Int(targetCG.height))")
         for (i, screen) in NSScreen.screens.enumerated() {
             let cg = cgRect(for: screen)
-            logger.info("  Screen \(i) CG: \(screen.localizedName) origin=(\(Int(cg.origin.x)),\(Int(cg.origin.y))) size=\(Int(cg.width))×\(Int(cg.height))")
+            logger.notice("  Screen \(i) CG: \(screen.localizedName) origin=(\(Int(cg.origin.x)),\(Int(cg.origin.y))) size=\(Int(cg.width))×\(Int(cg.height))")
         }
+        logger.notice("  Touch device IDs: \(self.touchDeviceIDs.sorted())")
+        logger.notice("  Panel: \(self.panel != nil ? "connected" : "NOT connected")")
+        logger.notice("  Thread: \(Thread.isMainThread ? "main" : "background")")
     }
 
     /// Stop the touch remapper.
@@ -139,7 +171,9 @@ nonisolated class TouchRemapper {
         eventTap = nil
         runLoopSource = nil
         isActive = false
-        logger.info("Touch remapper stopped")
+        isTrackingTouch = false
+        moveLogCounter = 0
+        logger.notice("Touch remapper stopped")
     }
 
     /// Enter "learning mode" — the next touch event on the primary display will be
@@ -148,14 +182,14 @@ nonisolated class TouchRemapper {
     func startLearning() {
         isLearning = true
         touchDeviceIDs = []
-        logger.info("Touch remapper learning mode — touch the Xeneon Edge screen")
+        logger.notice("Touch remapper learning mode — touch the Xeneon Edge screen")
     }
 
     /// Set a single touchscreen device ID (manual calibration / learning mode).
     func setTouchDeviceID(_ id: Int64) {
         touchDeviceIDs = [id]
         isLearning = false
-        logger.info("Touch device ID set to \(id)")
+        logger.notice("Touch device ID set to \(id)")
     }
 
     /// Set multiple possible touchscreen device IDs (auto-detection via IOKit).
@@ -164,7 +198,7 @@ nonisolated class TouchRemapper {
     func setTouchDeviceIDs(_ ids: Set<Int64>) {
         touchDeviceIDs = ids
         isLearning = false
-        logger.info("Touch device IDs set: \(ids.sorted())")
+        logger.notice("Touch device IDs set: \(ids.sorted())")
     }
 
     // MARK: - Coordinate Remapping
@@ -207,11 +241,14 @@ nonisolated class TouchRemapper {
 
     // MARK: - Event Processing
 
-    /// Counter for throttling mouseMoved/mouseDragged logs.
-    private var moveLogCounter: Int = 0
-
-    /// Process a CGEvent and potentially remap its coordinates.
-    /// Called from the C callback.
+    /// Process a CGEvent from the touchscreen.
+    ///
+    /// **Direct delivery approach:** For touchscreen events, we SUPPRESS the original
+    /// event (return nil) and deliver an NSEvent directly to the LedgePanel via
+    /// `sendEvent()`. The event never re-enters the window server, so there is no
+    /// cursor movement, focus change, or app activation.
+    ///
+    /// For non-touchscreen events (trackpad, mouse), we pass through unmodified.
     func processEvent(_ event: CGEvent) -> CGEvent? {
         // mouseEventDeviceID (raw value 87) is not bridged to Swift's CGEventField enum
         let deviceID = event.getIntegerValueField(CGEventField(rawValue: 87)!)
@@ -222,71 +259,193 @@ nonisolated class TouchRemapper {
         // Determine if this is a "key" event worth full logging (not move/drag)
         let isKeyEvent = (eventType == .leftMouseDown || eventType == .leftMouseUp)
 
-        // Learning mode: only capture device ID from mouseDown events.
-        // This prevents trackpad movement (mouseMoved) from being misidentified
-        // as the touchscreen. The user must physically tap the Xeneon Edge.
+        // ── Learning mode ──
+        // Only capture device ID from mouseDown events to prevent trackpad
+        // movement being misidentified as the touchscreen.
         if isLearning {
             if eventType == .leftMouseDown {
                 touchDeviceIDs = [deviceID]
                 isLearning = false
-                logger.info("⚡ LEARN: captured device=\(deviceID) from \(typeName) at (\(Int(location.x)),\(Int(location.y)))")
+                logger.notice("⚡ LEARN: captured device=\(deviceID) from \(typeName) at (\(Int(location.x)),\(Int(location.y)))")
                 onLearningComplete?()
             } else if isKeyEvent {
-                logger.info("⏳ LEARN: ignoring \(typeName) from device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — waiting for mouseDown")
+                logger.notice("⏳ LEARN: ignoring \(typeName) from device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — waiting for mouseDown")
             }
-            // During learning, pass ALL events through unmodified
             return event
         }
 
-        // No device IDs known yet — pass through unmodified
+        // ── Device filtering ──
         guard !touchDeviceIDs.isEmpty else {
-            if isKeyEvent {
-                logger.info("→ PASS: \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — no device learned")
-            }
-            return event
+            return event  // No device IDs known yet
         }
 
-        // Not from the touchscreen — pass through unmodified
         guard touchDeviceIDs.contains(deviceID) else {
-            if isKeyEvent {
-                logger.info("→ PASS: \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — not in touch device set")
-            }
-            return event
+            return event  // Not from the touchscreen
         }
 
-        // ── This IS from the touchscreen device ──
+        // ══════════════════════════════════════════════════════════════════
+        // This IS from the touchscreen device — suppress and deliver to panel.
+        // ══════════════════════════════════════════════════════════════════
 
-        guard let remapped = remapPoint(location) else {
-            // Coordinates are outside the primary display range. This happens when:
-            // 1. A previous remapped mouseDown moved the cursor to the Edge, and
-            //    subsequent drag/up events already carry Edge coordinates.
-            // 2. macOS adjusted its absolute-to-screen mapping after our remap.
-            // In both cases, the coordinates are already correct — pass through.
-            let targetRect = targetScreen.map { cgRect(for: $0) }
-            let isOnTarget = targetRect.map { $0.contains(location) } ?? false
-            if isKeyEvent {
-                if isOnTarget {
-                    logger.info("→ THRU: \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — already on Edge")
-                } else {
-                    logger.info("→ THRU: \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — outside primary, passing through")
-                }
-            }
-            onEventProcessed?(deviceID, location, location)
-            return event
+        // mouseMoved from the touchscreen is hover noise — touchscreens don't
+        // have meaningful hover state. Suppress without delivering.
+        // (mouseDragged is different — that's finger-on-screen movement.)
+        if eventType == .mouseMoved && !isTrackingTouch {
+            return nil
         }
 
-        event.location = remapped
-        if isKeyEvent {
-            logger.info("✦ REMAP: \(typeName) device=\(deviceID) (\(Int(location.x)),\(Int(location.y))) → (\(Int(remapped.x)),\(Int(remapped.y)))")
+        // ── Determine the target position ──
+        let targetRect = targetScreen.map { cgRect(for: $0) }
+        let isAlreadyOnTarget = targetRect.map { $0.contains(location) } ?? false
+
+        let edgePoint: CGPoint
+        if isAlreadyOnTarget {
+            edgePoint = location
         } else {
-            moveLogCounter += 1
-            if moveLogCounter % 60 == 1 {
-                logger.info("✦ REMAP: \(typeName) device=\(deviceID) (\(Int(location.x)),\(Int(location.y))) → (\(Int(remapped.x)),\(Int(remapped.y))) [+\(self.moveLogCounter - 1) move events]")
+            guard let remapped = remapPoint(location) else {
+                if isKeyEvent {
+                    logger.warning("⚠ [seq \(self.touchSequenceID)] DROP \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — cannot remap")
+                }
+                return nil
             }
+            edgePoint = remapped
         }
 
-        onEventProcessed?(deviceID, location, remapped)
-        return event
+        // ── Touch sequence lifecycle + logging ──
+
+        switch eventType {
+        case .leftMouseDown:
+            touchSequenceID += 1
+            moveLogCounter = 0
+            isTrackingTouch = true
+            logger.notice("🔽 [seq \(self.touchSequenceID)] TOUCH DOWN device=\(deviceID) (\(Int(location.x)),\(Int(location.y))) → (\(Int(edgePoint.x)),\(Int(edgePoint.y)))")
+
+        case .leftMouseDragged, .mouseMoved:
+            moveLogCounter += 1
+            if moveLogCounter % 30 == 1 {
+                logger.notice("↔ [seq \(self.touchSequenceID)] DRAG #\(self.moveLogCounter) device=\(deviceID) (\(Int(location.x)),\(Int(location.y))) → (\(Int(edgePoint.x)),\(Int(edgePoint.y)))")
+            }
+
+        case .leftMouseUp:
+            logger.notice("🔼 [seq \(self.touchSequenceID)] TOUCH UP device=\(deviceID) (\(Int(location.x)),\(Int(location.y))) → (\(Int(edgePoint.x)),\(Int(edgePoint.y)))  dragEvents=\(self.moveLogCounter)")
+
+        default:
+            break
+        }
+
+        // ── Deliver to panel ──
+        deliverEventToPanel(type: eventType, at: edgePoint, originalEvent: event)
+
+        // ── End touch sequence on mouseUp ──
+        if eventType == .leftMouseUp {
+            isTrackingTouch = false
+            moveLogCounter = 0
+        }
+
+        onEventProcessed?(deviceID, location, edgePoint)
+
+        // Suppress the original event — the OS never sees it
+        return nil
+    }
+
+    // MARK: - Direct NSEvent Delivery
+
+    /// Convert a CG point (origin top-left, Y down) to window-local Cocoa coordinates
+    /// (origin bottom-left of window, Y up).
+    private func cgPointToWindowLocal(_ cgPoint: CGPoint, in window: NSWindow) -> NSPoint {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        // CG to Cocoa global: Y flips around primary display height
+        let cocoaGlobalY = primaryHeight - cgPoint.y
+        // Cocoa global to window-local: subtract window origin
+        let frame = window.frame
+        return NSPoint(
+            x: cgPoint.x - frame.origin.x,
+            y: cocoaGlobalY - frame.origin.y
+        )
+    }
+
+    /// Deliver a touch event directly to the LedgePanel as an NSEvent.
+    ///
+    /// This bypasses the window server entirely — the event only exists within
+    /// the application. No cursor movement, no focus change, no app activation.
+    ///
+    /// IMPORTANT: We build the NSEvent eagerly (capturing all values from the
+    /// CGEvent while it's still valid) but deliver it asynchronously via
+    /// `DispatchQueue.main.async`. The CGEventTap callback runs on the main
+    /// run loop, and calling `panel.sendEvent()` synchronously inside it would
+    /// deadlock if SwiftUI's event handling re-enters the run loop (which it
+    /// does for layout, animation, and state updates).
+    private func deliverEventToPanel(type: CGEventType, at cgPoint: CGPoint, originalEvent: CGEvent) {
+        guard let panel = self.panel else {
+            logger.warning("⚠ [seq \(self.touchSequenceID)] No panel — cannot deliver \(Self.eventTypeName(type))")
+            return
+        }
+
+        // Convert CG coordinates to window-local Cocoa coordinates
+        let windowPoint = cgPointToWindowLocal(cgPoint, in: panel)
+
+        // Map CGEventType to NSEvent.EventType
+        let nsType: NSEvent.EventType
+        switch type {
+        case .leftMouseDown:    nsType = .leftMouseDown
+        case .leftMouseUp:      nsType = .leftMouseUp
+        case .leftMouseDragged: nsType = .leftMouseDragged
+        case .mouseMoved:       nsType = .mouseMoved
+        default:                return
+        }
+
+        // Click count from the original event (for double-tap detection)
+        let clickCount: Int
+        if type == .leftMouseDown || type == .leftMouseUp {
+            clickCount = max(1, Int(originalEvent.getIntegerValueField(.mouseEventClickState)))
+        } else {
+            clickCount = 0
+        }
+
+        // Pressure: 1.0 while touching, 0.0 on release
+        let pressure: Float = (type == .leftMouseUp) ? 0.0 : 1.0
+
+        // Convert CGEventFlags to NSEvent.ModifierFlags
+        let modifiers = NSEvent.ModifierFlags(rawValue: UInt(originalEvent.flags.rawValue))
+
+        // Build the NSEvent NOW while the CGEvent is still valid.
+        // The windowNumber and coordinates are captured eagerly.
+        let windowNumber = panel.windowNumber
+
+        guard let nsEvent = NSEvent.mouseEvent(
+            with: nsType,
+            location: windowPoint,
+            modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: clickCount,
+            pressure: pressure
+        ) else {
+            logger.error("⚠ [seq \(self.touchSequenceID)] Failed to create NSEvent at windowLocal=(\(Int(windowPoint.x)),\(Int(windowPoint.y)))")
+            return
+        }
+
+        // Deliver asynchronously to avoid deadlocking the run loop.
+        // The CGEventTap callback runs inside a run loop source; calling
+        // panel.sendEvent() synchronously can block if SwiftUI re-enters
+        // the run loop for layout/animation. Async dispatch breaks the cycle.
+        DispatchQueue.main.async {
+            // Prevent any window ordering changes from this event
+            NSApp.preventWindowOrdering()
+
+            // Ensure the panel is key so SwiftUI gesture recognizers are active.
+            // On a .nonactivatingPanel this does NOT activate the app.
+            if !panel.isKeyWindow {
+                panel.makeKey()
+            }
+
+            // Deliver directly to the panel — this goes through NSWindow.sendEvent
+            // which does hit testing and routes to the NSHostingView (SwiftUI).
+            // The event never enters the window server.
+            panel.sendEvent(nsEvent)
+        }
     }
 
     /// Human-readable name for a CGEventType.
@@ -337,6 +496,7 @@ nonisolated private func touchRemapperCallback(
             if let tap = remapper.eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
+            remapper.logger.warning("⚠ Event tap was disabled by \(type == .tapDisabledByTimeout ? "timeout" : "user input") — re-enabled")
         }
         return Unmanaged.passUnretained(event)
     }
@@ -351,6 +511,6 @@ nonisolated private func touchRemapperCallback(
         return Unmanaged.passUnretained(processed)
     }
 
-    // processEvent returned nil → drop the event (prevents cursor jumping to wrong location)
+    // processEvent returned nil → suppress the event
     return nil
 }

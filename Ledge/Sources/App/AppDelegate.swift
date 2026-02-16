@@ -56,6 +56,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             displayManager.showPanelWhenReady(requiredPermissions: requiredPerms) { [weak self] in
                 guard let self else { return }
 
+                // Configure panel transparency for blur/image backgrounds
+                self.configurePanelTransparency()
+
                 let dashboardView = DashboardView(
                     layoutManager: self.layoutManager,
                     configStore: self.configStore,
@@ -65,8 +68,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 .environment(self.themeManager)
                 self.displayManager.setPanelContent(dashboardView)
 
-                // Touch remapper disabled for now — re-enable when testing on hardware
-                // self.displayManager.startTouchRemapper()
+                // Start touch remapper — suppresses wrongly-mapped mouse events from the
+                // Edge touchscreen and posts synthetic events at the correct Edge position.
+                self.displayManager.startTouchRemapper()
 
                 self.logger.info("Panel displayed on Xeneon Edge")
             }
@@ -199,6 +203,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Panel Configuration
+
+    /// Configure the panel's opacity based on the current background settings.
+    /// Blur and Transparent widget styles require a non-opaque panel so the
+    /// desktop wallpaper or background image shows through gaps between widgets.
+    /// Solid mode keeps the panel opaque for best performance.
+    private func configurePanelTransparency() {
+        let needsTransparency = themeManager.widgetBackgroundStyle != .solid
+        displayManager.panel?.setTransparent(needsTransparency)
     }
 
     // MARK: - Permission Helpers

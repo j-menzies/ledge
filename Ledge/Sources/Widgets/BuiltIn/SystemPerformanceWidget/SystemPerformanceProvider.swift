@@ -1,10 +1,13 @@
 import Foundation
+import Darwin
 import os.log
 
-/// Collects system performance metrics (CPU, Memory, Disk) using Darwin APIs.
+/// Collects system performance metrics (CPU, Memory, Disk, Network) using Darwin APIs.
 ///
-/// Must be `nonisolated` because `host_processor_info` and related calls
-/// can block briefly. Callers should dispatch from a background context.
+/// All mutable state (previous CPU info, network snapshots) is protected by a serial
+/// dispatch queue to prevent race conditions when `collect()` is called from concurrent
+/// `Task.detached` contexts. The Mach VM buffer from `host_processor_info` must be
+/// deallocated exactly once — a data race here causes a double-free crash.
 nonisolated class SystemPerformanceProvider: @unchecked Sendable {
 
     private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SystemPerformance")
@@ -17,19 +20,40 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
         var diskUsed: Double = 0        // GB
         var diskTotal: Double = 0       // GB
         var diskPercent: Double = 0     // 0-100%
+        var networkDownBytesPerSec: Double = 0
+        var networkUpBytesPerSec: Double = 0
     }
 
-    // Previous CPU ticks for delta calculation
+    /// Serial queue protecting all mutable state (CPU info buffer, network snapshot).
+    /// Prevents race conditions when overlapping Task.detached calls invoke collect().
+    private nonisolated(unsafe) let stateQueue = DispatchQueue(label: "com.ledge.SystemPerformanceProvider")
+
+    // Previous CPU ticks for delta calculation — access ONLY on stateQueue
     private nonisolated(unsafe) var previousCPUInfo: processor_info_array_t?
     private nonisolated(unsafe) var previousCPUInfoCount: mach_msg_type_number_t = 0
 
+    // Previous network snapshot for delta calculation — access ONLY on stateQueue
+    private struct NetworkSnapshot {
+        var bytesIn: UInt64 = 0
+        var bytesOut: UInt64 = 0
+        var timestamp: Date = Date()
+    }
+    private nonisolated(unsafe) var previousNetworkSnapshot: NetworkSnapshot?
+
     /// Collect current system metrics.
+    /// Thread-safe: serialised via stateQueue to prevent overlapping access to
+    /// the Mach VM buffer from host_processor_info.
     func collect() -> Metrics {
-        var m = Metrics()
-        m.cpuUsage = collectCPU()
-        (m.memoryUsed, m.memoryTotal, m.memoryPercent) = collectMemory()
-        (m.diskUsed, m.diskTotal, m.diskPercent) = collectDisk()
-        return m
+        stateQueue.sync {
+            var m = Metrics()
+            m.cpuUsage = collectCPU()
+            (m.memoryUsed, m.memoryTotal, m.memoryPercent) = collectMemory()
+            (m.diskUsed, m.diskTotal, m.diskPercent) = collectDisk()
+            let net = collectNetwork()
+            m.networkDownBytesPerSec = net.down
+            m.networkUpBytesPerSec = net.up
+            return m
+        }
     }
 
     // MARK: - CPU
@@ -128,5 +152,51 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
         let percent = (usedGB / totalGB) * 100.0
 
         return (usedGB, totalGB, percent)
+    }
+
+    // MARK: - Network (WiFi / en0)
+
+    private func collectNetwork() -> (down: Double, up: Double) {
+        let current = takeNetworkSnapshot()
+        defer { previousNetworkSnapshot = current }
+
+        guard let prev = previousNetworkSnapshot else { return (0, 0) }
+
+        let elapsed = current.timestamp.timeIntervalSince(prev.timestamp)
+        guard elapsed > 0 else { return (0, 0) }
+
+        // Handle counter wrap-around
+        let bytesInDelta = current.bytesIn >= prev.bytesIn ? current.bytesIn - prev.bytesIn : current.bytesIn
+        let bytesOutDelta = current.bytesOut >= prev.bytesOut ? current.bytesOut - prev.bytesOut : current.bytesOut
+
+        return (
+            down: Double(bytesInDelta) / elapsed,
+            up: Double(bytesOutDelta) / elapsed
+        )
+    }
+
+    private func takeNetworkSnapshot() -> NetworkSnapshot {
+        var snapshot = NetworkSnapshot()
+
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else { return snapshot }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var current: UnsafeMutablePointer<ifaddrs>? = firstAddr
+        while let ifa = current {
+            let name = String(cString: ifa.pointee.ifa_name)
+            if name == "en0",
+               ifa.pointee.ifa_addr.pointee.sa_family == UInt8(AF_LINK),
+               let data = ifa.pointee.ifa_data {
+                let ifData = data.assumingMemoryBound(to: if_data.self)
+                snapshot.bytesIn = UInt64(ifData.pointee.ifi_ibytes)
+                snapshot.bytesOut = UInt64(ifData.pointee.ifi_obytes)
+                break
+            }
+            current = ifa.pointee.ifa_next
+        }
+
+        snapshot.timestamp = Date()
+        return snapshot
     }
 }

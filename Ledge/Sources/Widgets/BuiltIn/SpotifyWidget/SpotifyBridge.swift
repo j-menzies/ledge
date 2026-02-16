@@ -13,6 +13,11 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
 
     private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SpotifyBridge")
 
+    /// Serial queue for all AppleScript execution. NSAppleScript is not thread-safe
+    /// and requires consistent thread affinity for AppleEvent dispatch. Using GCD
+    /// global queues caused intermittent crashes after extended 2-second polling.
+    private nonisolated(unsafe) let scriptQueue = DispatchQueue(label: "com.ledge.SpotifyBridge")
+
     struct PlaybackState: Sendable {
         var isPlaying: Bool = false
         var trackName: String = ""
@@ -134,24 +139,31 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
 
     // MARK: - Private
 
+    /// Execute AppleScript synchronously on the serial script queue.
+    /// All NSAppleScript usage goes through the same queue for thread safety.
     @discardableResult
     private func runAppleScript(_ source: String) -> String? {
-        var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else { return nil }
-        let result = script.executeAndReturnError(&error)
-        if let error {
-            logger.debug("AppleScript error: \(error)")
-            return nil
+        scriptQueue.sync {
+            var error: NSDictionary?
+            guard let script = NSAppleScript(source: source) else { return nil }
+            let result = script.executeAndReturnError(&error)
+            if let error {
+                logger.debug("AppleScript error: \(error)")
+                return nil
+            }
+            return result.stringValue
         }
-        return result.stringValue
     }
 
-    /// Fire-and-forget AppleScript on a background thread.
+    /// Fire-and-forget AppleScript on the serial script queue.
     private func runAppleScriptFire(_ source: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        scriptQueue.async { [logger] in
             var error: NSDictionary?
             guard let script = NSAppleScript(source: source) else { return }
             script.executeAndReturnError(&error)
+            if let error {
+                logger.debug("AppleScript fire error: \(error)")
+            }
         }
     }
 }

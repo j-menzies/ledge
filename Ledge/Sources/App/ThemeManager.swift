@@ -115,6 +115,25 @@ enum ThemeMode: String, Codable, CaseIterable {
     }
 }
 
+// MARK: - Widget Background Style
+
+/// Controls how widget backgrounds are rendered.
+enum WidgetBackgroundStyle: String, Codable, CaseIterable {
+    case solid = "Solid"
+    case blur = "Blur"
+    case transparent = "Transparent"
+
+    var displayName: String { rawValue }
+}
+
+/// Controls what's shown behind the widget grid.
+enum DashboardBackgroundMode: String, Codable, CaseIterable {
+    case themeColor = "Theme Color"
+    case image = "Image"
+
+    var displayName: String { rawValue }
+}
+
 // MARK: - Theme Manager
 
 @Observable
@@ -135,23 +154,69 @@ class ThemeManager {
     /// Tracks system appearance for auto mode.
     var systemIsDark: Bool = true
 
+    // MARK: - Appearance Settings
+
+    /// How widget backgrounds are rendered.
+    var widgetBackgroundStyle: WidgetBackgroundStyle = .solid {
+        didSet { save() }
+    }
+
+    /// What's shown behind the widget grid.
+    var dashboardBackgroundMode: DashboardBackgroundMode = .themeColor {
+        didSet { save() }
+    }
+
+    /// Path to a custom background image (when dashboardBackgroundMode == .image).
+    var backgroundImagePath: String = "" {
+        didSet { save(); loadBackgroundImage() }
+    }
+
+    /// The loaded background NSImage, if any.
+    var backgroundImage: NSImage? = nil
+
     private let key = "com.ledge.themeMode"
+    private let bgStyleKey = "com.ledge.widgetBackgroundStyle"
+    private let bgModeKey = "com.ledge.dashboardBackgroundMode"
+    private let bgImageKey = "com.ledge.backgroundImagePath"
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: key),
            let mode = ThemeMode(rawValue: saved) {
             self.mode = mode
         }
+        if let saved = UserDefaults.standard.string(forKey: bgStyleKey),
+           let style = WidgetBackgroundStyle(rawValue: saved) {
+            self.widgetBackgroundStyle = style
+        }
+        if let saved = UserDefaults.standard.string(forKey: bgModeKey),
+           let mode = DashboardBackgroundMode(rawValue: saved) {
+            self.dashboardBackgroundMode = mode
+        }
+        if let saved = UserDefaults.standard.string(forKey: bgImageKey), !saved.isEmpty {
+            self.backgroundImagePath = saved
+        }
         detectSystemAppearance()
+        loadBackgroundImage()
     }
 
     private func save() {
         UserDefaults.standard.set(mode.rawValue, forKey: key)
+        UserDefaults.standard.set(widgetBackgroundStyle.rawValue, forKey: bgStyleKey)
+        UserDefaults.standard.set(dashboardBackgroundMode.rawValue, forKey: bgModeKey)
+        UserDefaults.standard.set(backgroundImagePath, forKey: bgImageKey)
     }
 
     func detectSystemAppearance() {
         guard let appearance = NSApp?.effectiveAppearance else { return }
         systemIsDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    private func loadBackgroundImage() {
+        guard !backgroundImagePath.isEmpty else {
+            backgroundImage = nil
+            return
+        }
+        backgroundImage = NSImage(contentsOfFile: backgroundImagePath)
     }
 }
 

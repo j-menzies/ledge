@@ -49,11 +49,14 @@ class LedgePanel: NSPanel {
         isMovableByWindowBackground = false
         isMovable = false
 
-        // Appear on all Spaces and alongside fullscreen apps on the primary display
+        // Appear on all Spaces, stay put during Space switches, and sit alongside
+        // fullscreen apps. `.ignoresCycle` keeps the panel out of Cmd+` window cycling.
+        // `.stationary` prevents the sliding animation when switching Spaces.
         collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
-            .stationary
+            .stationary,
+            .ignoresCycle
         ]
 
         // Ensure no title bar at all
@@ -97,6 +100,21 @@ class LedgePanel: NSPanel {
         // to the NSHostingView (SwiftUI). Do NOT manually forward to contentView
         // — that bypasses the responder chain and breaks gesture recognisers.
         super.mouseDown(with: event)
+    }
+
+    // MARK: - Transparency
+
+    /// Enable transparent panel background for blur/image effects.
+    /// When enabled, the panel's background becomes clear so that
+    /// `NSVisualEffectView` blur and background images work correctly.
+    func setTransparent(_ transparent: Bool) {
+        if transparent {
+            isOpaque = false
+            backgroundColor = .clear
+        } else {
+            isOpaque = true
+            backgroundColor = .black
+        }
     }
 
     // MARK: - Lifecycle

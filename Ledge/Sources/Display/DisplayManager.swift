@@ -118,6 +118,11 @@ class DisplayManager: ObservableObject {
         let timestamp: Date
     }
 
+    // MARK: - Display Security
+
+    /// Whether the panel is currently blanked due to screen lock, sleep, or screensaver.
+    @Published private(set) var isDisplayBlanked: Bool = false
+
     // MARK: - Private
 
     private let logger = Logger(subsystem: "com.ledge.app", category: "DisplayManager")
@@ -136,16 +141,23 @@ class DisplayManager: ObservableObject {
     private var gateEventStore: EKEventStore?
     private var gatedPermissions: Set<WidgetPermission> = []
     private var onPermissionsResolved: (() -> Void)?
+    /// Observers for sleep/lock/screensaver events.
+    private var securityObservers: [Any] = []
 
     // MARK: - Lifecycle
 
     init() {
         registerForDisplayChanges()
+        registerForSecurityEvents()
         detectXenonEdge()
     }
 
     deinit {
-        // Cleanup is handled by ARC; the reconfiguration callback is managed by the system
+        for observer in securityObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
     }
 
     // MARK: - Display Detection
@@ -198,21 +210,18 @@ class DisplayManager: ObservableObject {
 
         if panel == nil {
             panel = LedgePanel(on: screen)
+            touchRemapper.panel = panel
             logger.info("Created LedgePanel on Xeneon Edge")
         }
 
-        // If "Displays have separate Spaces" is on, secondary displays have their own
-        // menu bar. Use a fullscreen helper window to auto-hide it — this mimics what
-        // Safari/Chrome do when entering fullscreen on a secondary display.
-        // IMPORTANT: The panel must be shown AFTER the helper finishes entering
-        // fullscreen, otherwise the menu bar won't auto-hide.
-        if NSScreen.screensHaveSeparateSpaces {
-            ensureFullscreenHelper(on: screen) { [weak self] in
-                self?.revealPanel(on: screen)
-            }
-        } else {
-            revealPanel(on: screen)
-        }
+        // The LedgePanel at .screenSaver level (1000) is well above the menu bar (~24),
+        // so it covers the menu bar on the Edge without needing a fullscreen helper.
+        //
+        // We deliberately avoid a FullscreenHelperWindow because entering native fullscreen
+        // on the Edge creates a dedicated fullscreen Space that participates in macOS Space
+        // switching — when the user swipes Spaces on their primary display, the Edge Space
+        // would animate/switch too, disrupting the always-visible widget dashboard.
+        revealPanel(on: screen)
     }
 
     /// Actually make the panel visible. Called directly (no fullscreen helper needed)
@@ -236,6 +245,7 @@ class DisplayManager: ObservableObject {
     /// Completely tear down the panel.
     func destroyPanel() {
         panel?.orderOut(nil)
+        touchRemapper.panel = nil
         panel = nil
         isActive = false
         tearDownFullscreenHelper()
@@ -637,6 +647,85 @@ class DisplayManager: ObservableObject {
         helper.orderOut(nil)
         fullscreenHelper = nil
         logger.info("Fullscreen helper torn down")
+    }
+
+    // MARK: - Display Security (Sleep / Lock / Screensaver)
+    //
+    // The Xeneon Edge must not leak widget content when the system is locked,
+    // sleeping, or showing the screensaver. We observe all relevant system
+    // notifications and blank the panel until the user unlocks/wakes.
+
+    /// Register for all system events that should cause the panel to blank.
+    private func registerForSecurityEvents() {
+        let ws = NSWorkspace.shared.notificationCenter
+        let dc = DistributedNotificationCenter.default()
+
+        // Display sleep/wake
+        securityObservers.append(
+            ws.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.blankDisplay(reason: "displays slept") }
+            }
+        )
+        securityObservers.append(
+            ws.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.unblankDisplay(reason: "displays woke") }
+            }
+        )
+
+        // System sleep/wake (covers lid close, sleep menu, idle sleep)
+        securityObservers.append(
+            ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.blankDisplay(reason: "system sleeping") }
+            }
+        )
+        securityObservers.append(
+            ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                // Don't unblank on wake — wait for unlock. If no lock screen is configured,
+                // screensDidWake will handle it.
+            }
+        )
+
+        // Screen lock/unlock (requires login to dismiss)
+        securityObservers.append(
+            dc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.blankDisplay(reason: "screen locked") }
+            }
+        )
+        securityObservers.append(
+            dc.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.unblankDisplay(reason: "screen unlocked") }
+            }
+        )
+
+        // Screensaver start/stop
+        securityObservers.append(
+            dc.addObserver(forName: NSNotification.Name("com.apple.screensaver.didStart"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.blankDisplay(reason: "screensaver started") }
+            }
+        )
+        securityObservers.append(
+            dc.addObserver(forName: NSNotification.Name("com.apple.screensaver.didStop"), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.unblankDisplay(reason: "screensaver stopped") }
+            }
+        )
+
+        logger.info("Registered for sleep/lock/screensaver security events")
+    }
+
+    /// Hide panel content — shows black to prevent information leakage.
+    private func blankDisplay(reason: String) {
+        guard !isDisplayBlanked else { return }
+        isDisplayBlanked = true
+        panel?.contentView?.isHidden = true
+        logger.info("Display blanked: \(reason)")
+    }
+
+    /// Restore panel content after the system is unlocked/awake.
+    private func unblankDisplay(reason: String) {
+        guard isDisplayBlanked else { return }
+        isDisplayBlanked = false
+        panel?.contentView?.isHidden = false
+        logger.info("Display unblanked: \(reason)")
     }
 
     // MARK: - Detection Helpers

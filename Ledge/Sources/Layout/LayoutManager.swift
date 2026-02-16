@@ -15,8 +15,17 @@ class LayoutManager {
     /// The currently active layout rendered on the Xeneon Edge.
     var activeLayout: WidgetLayout
 
-    /// All saved layouts.
+    /// All saved layouts (these are the "pages" when swiping on the Edge).
     var savedLayouts: [WidgetLayout] = []
+
+    /// Index of the currently active layout within `savedLayouts`.
+    /// Used for page indicator and swipe navigation on the Edge.
+    var activePageIndex: Int {
+        savedLayouts.firstIndex(where: { $0.id == activeLayout.id }) ?? 0
+    }
+
+    /// Total number of pages (saved layouts).
+    var pageCount: Int { savedLayouts.count }
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -85,6 +94,28 @@ class LayoutManager {
     func switchLayout(to layout: WidgetLayout) {
         activeLayout = layout
         save()
+    }
+
+    /// Switch to the next page (layout). Wraps around to the first page.
+    func nextPage() {
+        guard savedLayouts.count > 1 else { return }
+        let nextIndex = (activePageIndex + 1) % savedLayouts.count
+        switchLayout(to: savedLayouts[nextIndex])
+        logger.info("Switched to page \(nextIndex + 1)/\(self.savedLayouts.count): \(self.activeLayout.name)")
+    }
+
+    /// Switch to the previous page (layout). Wraps around to the last page.
+    func previousPage() {
+        guard savedLayouts.count > 1 else { return }
+        let prevIndex = (activePageIndex - 1 + savedLayouts.count) % savedLayouts.count
+        switchLayout(to: savedLayouts[prevIndex])
+        logger.info("Switched to page \(prevIndex + 1)/\(self.savedLayouts.count): \(self.activeLayout.name)")
+    }
+
+    /// Switch to a specific page by index.
+    func switchToPage(_ index: Int) {
+        guard index >= 0 && index < savedLayouts.count else { return }
+        switchLayout(to: savedLayouts[index])
     }
 
     /// Save the active layout to disk.
