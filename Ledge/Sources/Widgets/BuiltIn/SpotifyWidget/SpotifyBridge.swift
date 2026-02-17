@@ -14,9 +14,10 @@ nonisolated class SpotifyBridge: @unchecked Sendable {
     private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SpotifyBridge")
 
     /// Serial queue for all AppleScript execution. NSAppleScript is not thread-safe
-    /// and requires consistent thread affinity for AppleEvent dispatch. Using GCD
-    /// global queues caused intermittent crashes after extended 2-second polling.
-    private nonisolated(unsafe) let scriptQueue = DispatchQueue(label: "com.ledge.SpotifyBridge")
+    /// and requires consistent thread affinity for AppleEvent dispatch. Shared with
+    /// GoogleMeetBridge via `AppleScriptQueue.shared` to prevent concurrent AppleScript
+    /// execution across different bridges from crashing the runtime.
+    private let scriptQueue = AppleScriptQueue.shared
 
     struct PlaybackState: Sendable {
         var isPlaying: Bool = false

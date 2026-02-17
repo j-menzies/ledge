@@ -56,10 +56,10 @@
 | Spotify | ✅ Working | AppleScript bridge, album art, playback controls, volume, progress seek, album colour extraction, marquee text, text reveal animation |
 | Calendar | ✅ Working | macOS EventKit integration. **Needs work:** respects visible/selected calendars only; shared calendars leak through |
 | Weather | ✅ Working | CoreLocation + WeatherKit |
-| Web | ✅ Working | Embedded WKWebView — configurable URL |
-| Home Assistant | ✅ Working | REST API integration, entity control (lights, covers, sensors) |
+| Web | ✅ Working | Embedded WKWebView — configurable URL. **Needs work:** touch scroll, swipe back/forward navigation |
+| Home Assistant | ✅ Working | REST API integration, entity control (lights, covers, sensors). **Needs work:** faders/sliders for dimmable lights, custom display names for entities |
 | System Performance | ✅ Working | CPU, memory, disk, network stats |
-| System Audio | ✅ Working | Per-app volume control, input/output device switching |
+| System Audio | ✅ Working | Per-app volume control, input/output device switching. **Needs work:** larger touch targets for buttons |
 | Google Meet | ✅ Working | AppleScript hook to Chrome — mic/camera toggle, meeting detection |
 
 ## Phase 2: Touch Refinement 🔄 IN PROGRESS
@@ -80,14 +80,25 @@ The TouchRemapper intercepts ALL mouse events from the touchscreen via a CGEvent
 - [x] Diagnostic logging at `.notice` level with sequence IDs
 - [x] Automatic permission polling + re-request on app activation
 
+### Touch Diagnostics & Testing Infrastructure
+
+- [x] **TouchCoordinateMath** — extracted pure coordinate transformation functions (testable without live displays)
+- [x] **TouchFlightRecorder** — ring buffer of last 500 touch events with device ID, coordinates, delivery status, latency
+- [x] **TouchWatchdog** — independent 5-second timer monitoring CGEventTap health, auto-re-enables if silently disabled
+- [x] **Delivery confirmation** — LedgePanel tracks received event count for drop detection
+- [x] **Touch Diagnostics widget** (`com.ledge.touch-diagnostics`) — real-time pipeline health, stats, and event log
+- [x] **Panel alignment bug fix** — `TouchRemapper.targetScreen` now updated on display rearrangement (was stale after screen config change)
+- [x] **XCTest target** — unit tests for coordinate math (remap, CG↔Cocoa conversion, window-local transform)
+
 ### Touch Known Issues & Open Work
 
-- [ ] **Stability:** Touch mapping occasionally drops or crashes — needs investigation. May be CGEventTap getting disabled under load, or the event tap thread timing out
-- [ ] **Focus leakage:** Mostly fixed with direct delivery, but edge cases remain. Goal is zero focus interference under all circumstances
+- [ ] **Stability:** Touch mapping occasionally drops or crashes — needs investigation. May be CGEventTap getting disabled under load, or the event tap thread timing out. Flight recorder + watchdog now provide diagnostic data
+- [ ] **Focus stealing (CRITICAL):** Active application loses focus when touching the Edge. This is the #1 usability blocker. The `.nonactivatingPanel` + direct NSEvent delivery approach should prevent this, but something is still activating the app. Investigate: (a) `panel.makeKey()` in `mouseDown` — does this activate the app? (b) SwiftUI views that trigger `NSApp.activate()` internally, (c) WKWebView in the Web widget may activate the app on interaction, (d) NSAlert/NSMenu/system UI triggered by widget code. Needs systematic debugging with the Touch Diagnostics widget active
 - [ ] **Mouse cursor guard:** When the mouse (not touch) drifts onto the Edge display, it can interact with widgets. Options: (a) invisible barrier that warps cursor back, (b) ignore mouse-sourced events on the Edge, (c) leave it for Web widget convenience. **Decision pending** — useful for Web widget but undesirable for everything else
 - [ ] **Touch disable toggle:** Settings UI toggle to completely disable the touch event tap. Placed alongside the existing Event Tap settings. Useful for: (a) preventing accidental touches, (b) using mouse-only mode on the Edge, (c) troubleshooting touch issues. When disabled, the CGEventTap is torn down entirely — touchscreen events pass through to macOS as normal mouse events
+- [ ] **Touch visual indicator:** Visual feedback when the screen is touched — ripple or highlight effect at touch point. Especially useful for buttons. May also show swipe direction/momentum for drag gestures
 - [ ] **Long-running gestures:** Volume/progress slider drags work but need more testing for reliability
-- [ ] **Event tap recovery:** If the CGEventTap is disabled by the system (timeout or user input), it re-enables — but need to verify touch state is properly reset
+- [ ] **Event tap recovery:** If the CGEventTap is disabled by the system (timeout or user input), it re-enables — but need to verify touch state is properly reset. TouchWatchdog now detects and re-enables silently disabled taps
 - [ ] **Multi-touch:** Not available on macOS via USB touchscreen — single-point only. Design all widgets for single-tap/drag interaction
 - [ ] **Comprehensive testing:** Systematic test plan needed — tap, drag, rapid taps, app switching during touch, sleep/wake with active touch, display disconnect during touch
 - [ ] **Separate Spaces per display:** macOS "Displays have separate Spaces" setting may break fullscreen panel behaviour on the Xeneon Edge. Needs systematic testing — panel visibility, Space switching, Mission Control interaction, fullscreen apps on primary display
@@ -167,6 +178,26 @@ Hook into the Microsoft Teams PWA (Progressive Web App running in browser) for m
 - [ ] **Screen sharing indicator** — visual feedback (e.g., flashing border) when screen is being shared
 - [ ] **Google Calendar direct integration** — OAuth-based REST API as an alternative/supplement to macOS EventKit. Gives full control over which calendars are visible, avoids the shared calendar leak issue. **Large effort** — requires OAuth flow, token management, refresh handling
 
+### Web Widget Improvements
+
+- [ ] **Touch scroll support** — enable vertical scroll via touch drag within the WKWebView. Currently touch events are intercepted by TouchRemapper and delivered as click/drag, but the WKWebView needs proper scroll gesture forwarding
+- [ ] **Swipe navigation** — swipe left-to-right triggers browser back, right-to-left triggers browser forward. Must coexist with the page-switching swipe gesture (page swipe is on the dashboard level; web swipe is within the widget). May need gesture disambiguation based on touch start location
+- [ ] **Scroll position persistence** — remember scroll position across page switches / app restarts
+
+### Home Assistant Widget Improvements
+
+- [ ] **Faders/sliders for dimmable entities** — replace on/off toggle with a slider for lights that support brightness, colour temperature, or cover position. Use the HA `light.turn_on` service with `brightness_pct` parameter
+- [ ] **Custom display names** — per-entity override of the display name in the widget. Stored in widget config. HA entity IDs are often cryptic (`light.hue_ambiance_lamp_1`); users should be able to rename to "Desk Lamp"
+- [ ] **Entity grouping** — organise entities into groups/rooms within the widget (e.g., "Living Room", "Office")
+- [ ] **RGB colour picker** — for lights that support colour, show a compact colour wheel or palette
+- [ ] **Cover controls** — open/close/stop buttons + position slider for blinds and covers
+- [ ] **Sensor display** — dedicated rendering for sensor entities (temperature, humidity, power) with sparkline history
+
+### System Audio Widget Improvements
+
+- [ ] **Larger button touch targets** — increase button sizes for reliable touch interaction on the Xeneon Edge (minimum 44pt, ideally 48pt+)
+- [ ] **Visual feedback on tap** — highlight/scale animation when buttons are pressed
+
 ### Other Widget Ideas
 
 - [ ] OBS Studio widget (scene switching, stream status)
@@ -188,14 +219,92 @@ Hook into the Microsoft Teams PWA (Progressive Web App running in browser) for m
 - [ ] Document HID reports in `docs/USB_PROTOCOL.md`
 - [ ] Investigate: does iCUE send pixel data via USB, or render on-monitor?
 
-## Phase 6: Distribution & Community 📋 FUTURE
+## Phase 6: Spotify Web API Integration 📋 PLANNED
 
-- [ ] Build as a signed, notarised .app for distribution
-- [ ] Performance profiling: 60fps rendering, low CPU when idle
-- [ ] Open source (licence TBD — likely MIT)
-- [ ] Layout sharing (export/import JSON)
-- [ ] Investigate Linux support
-- [ ] Plugin system assessment — currently keeping widgets built-in for simplicity. Revisit if community demand warrants it
+**Goal:** Replace or supplement the AppleScript bridge with Spotify's Web API for cross-device playback visibility and control.
+
+### Why
+
+The AppleScript bridge only sees the local Spotify desktop app. The Web API shows playback on *any* device (phone, smart speaker, another computer) and enables cross-device control (transfer playback to Mac from phone, etc.). This also eliminates the NSAppleScript thread-safety crashes that plague the current bridge.
+
+### Auth & Licensing
+
+- **Auth flow:** Authorization Code with PKCE — no client secret, no backend server. Ledge spins up a temporary HTTP listener on `127.0.0.1:<port>`, opens browser for Spotify login, receives auth code, exchanges for tokens, caches refresh token for persistence
+- **Classification:** Ledge is a **Non-Streaming SDA** (displays now-playing info, sends playback commands, but does not stream audio). Non-Streaming SDAs are permitted limited commercial use including App Store sales
+- **Development Mode limits:** 5 authorised users, 1 Client ID, requires owner to have Spotify Premium. Sufficient for personal use and beta testing
+- **Extended Quota Mode:** Required for public App Store distribution. Requires: registered business entity, 250,000 MAU, live launched service, operation in major Spotify markets. Apply when user base warrants it
+- **Branding:** Must display Spotify attribution/logo per branding guidelines. Album art must link back to Spotify
+
+### Implementation
+
+- [ ] Create `SpotifyAuthManager` — PKCE flow, token storage in Keychain, automatic refresh
+- [ ] Create `SpotifyAPIBridge` — Web API client for `/me/player`, `/me/player/devices`, playback control endpoints
+- [ ] Device selector in Spotify widget — show active device, allow transfer
+- [ ] "Playing on [device]" indicator when music is on another device
+- [ ] Album art via URL (cleaner than extracting from local app)
+- [ ] Keep AppleScript bridge as fallback for users without Spotify Premium or who prefer local-only
+- [ ] Settings toggle: "Use Spotify Web API" vs "Use local Spotify app"
+- [ ] Handle token expiry, network errors, and rate limiting gracefully
+
+### Quota Strategy
+
+1. **Phase 6 (now):** Development Mode — personal use + 5 beta testers
+2. **Post-App Store launch:** Apply for Extended Quota once user base grows. Until approved, AppleScript bridge is the default; Web API is opt-in for users who register their own Spotify app (common pattern for open-source/indie Spotify integrations)
+
+## Phase 7: App Store Preparation & Hardening 📋 FUTURE
+
+**Goal:** Ship Ledge as a signed, notarised macOS app on the Mac App Store (or as a Developer ID-signed direct download if App Sandbox restrictions prove incompatible).
+
+### Distribution Strategy
+
+CGEventTap and USB HID access require App Sandbox to be disabled, which **prevents Mac App Store distribution**. Two paths:
+
+- **Path A — Direct distribution (Developer ID):** Signed + notarised `.app` or `.dmg` via website. No sandbox restrictions. This is the most likely path given Ledge's permission requirements
+- **Path B — Mac App Store:** Would require sandboxing workarounds (XPC helper tool for CGEventTap, etc.). Higher discoverability but significant engineering effort. Investigate feasibility
+
+### Code Signing & Notarisation
+
+- [ ] Enrol in Apple Developer Program ($99/year)
+- [ ] Configure code signing with Developer ID certificate
+- [ ] Set up notarisation workflow (Xcode or `notarytool`)
+- [ ] Hardened Runtime entitlements: Accessibility, Input Monitoring
+- [ ] Investigate XPC helper for privileged operations (CGEventTap) if pursuing App Store path
+- [ ] Automated build pipeline (xcodebuild archive → notarise → staple → package)
+
+### User Hardening
+
+- [ ] **First-run onboarding flow** — guided setup: grant Accessibility permission, detect Xeneon Edge, calibrate touch, choose theme
+- [ ] **Graceful degradation** — work without Accessibility (no touch remapping), without Xeneon Edge (preview on primary display), without network (offline widgets only)
+- [ ] **Error recovery** — auto-restart CGEventTap on failure, reconnect to display on wake, recover from corrupt layout JSON
+- [ ] **Crash reporting** — lightweight crash reporter (or integrate with a service like Sentry/Crashlytics). At minimum, catch signals and write a crash log to `~/Library/Application Support/Ledge/crashes/`
+- [ ] **Auto-update mechanism** — Sparkle framework for direct distribution, or App Store automatic updates
+- [ ] **Permission health check** — Settings panel showing status of all required permissions with "Fix" buttons that open System Settings to the right pane
+- [ ] **Input validation** — sanitise all user inputs (widget config, URLs for Web widget, Home Assistant endpoints)
+- [ ] **Keychain storage** — move all tokens and credentials (Spotify, Home Assistant) from UserDefaults/files to macOS Keychain
+- [ ] **Memory & CPU budgets** — per-widget resource limits, kill or pause widgets that exceed thresholds
+- [ ] **Accessibility (a11y)** — VoiceOver labels for Settings UI, keyboard navigation in Settings
+
+### Performance & Reliability
+
+- [ ] Performance profiling: target 60fps rendering, <5% CPU when idle
+- [ ] Instruments profiling for memory leaks, especially in long-running widget timers
+- [ ] Stress testing: 10+ widgets active, rapid page switching, sleep/wake cycles, display disconnect/reconnect
+- [ ] Launch time optimisation — target <2s to panel visible
+
+### Packaging & Distribution
+
+- [ ] DMG or PKG installer with background image, Applications shortcut
+- [ ] Website with download link, screenshots, system requirements
+- [ ] Layout sharing (export/import JSON files)
+- [ ] Versioning strategy (semantic versioning, release notes)
+
+### Legal & Compliance
+
+- [ ] Privacy Policy (required for notarisation and any API integrations)
+- [ ] Spotify branding compliance (attribution, logo usage, content linking)
+- [ ] Home Assistant attribution if applicable
+- [ ] WeatherKit attribution requirements
+- [ ] EULA / Terms of Service (if selling)
 
 ---
 
@@ -208,7 +317,8 @@ Hook into the Microsoft Teams PWA (Progressive Web App running in browser) for m
 | macOS touchscreen → primary display mapping | Touch on wrong screen | **Fixed** — TouchRemapper intercepts and remaps coordinates |
 | Touch arrives as mouse events, not NSTouch | No multi-touch | **Confirmed** — design for single-point interaction only |
 | CGEventTap stability under load | Touch drops out | **Observed** — tap can be disabled by timeout; auto-re-enable implemented but needs more testing |
-| CGEventTap requires Accessibility + no sandbox | No Mac App Store | Distribute as notarised Developer ID app |
+| CGEventTap requires Accessibility + no sandbox | No Mac App Store | Distribute as notarised Developer ID app. Investigate XPC helper for App Store path |
+| Spotify Extended Quota requirements | Web API limited to 5 users in Dev Mode | AppleScript bridge as default, Web API opt-in. Apply for Extended Quota at scale |
 | SwiftUI performance at 2560×720 | Janky animations | Not yet profiled — monitor as widget count grows |
 | Plugin system security | Malicious code | **Deferred** — keeping widgets built-in for now |
 | Mouse cursor wandering onto Edge | Unintended widget interaction | **Under consideration** — useful for Web widget, problematic otherwise |

@@ -58,6 +58,7 @@ class WidgetRegistry {
         register(SystemPerformanceWidget.descriptor)
         register(SystemAudioWidget.descriptor)
         register(GoogleMeetWidget.descriptor)
+        register(TouchDiagnosticsWidget.descriptor)
         logger.info("Registered \(self.registeredTypes.count) built-in widget(s)")
     }
 }

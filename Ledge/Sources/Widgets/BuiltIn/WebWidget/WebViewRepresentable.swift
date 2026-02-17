@@ -14,6 +14,19 @@ struct WebViewRepresentable: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.suppressesIncrementalRendering = true
 
+        // Block JavaScript focus-stealing — window.focus() and similar calls
+        // can activate the Ledge app and steal focus from the foreground app.
+        let antiFocusScript = WKUserScript(
+            source: """
+            window.focus = function() {};
+            window.blur = function() {};
+            if (window.opener) { window.opener.focus = function() {}; }
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false  // Also inject into iframes
+        )
+        config.userContentController.addUserScript(antiFocusScript)
+
         // Inject custom CSS if provided
         if let css = customCSS, !css.isEmpty {
             let script = WKUserScript(

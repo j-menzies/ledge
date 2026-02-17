@@ -86,6 +86,24 @@ class LedgePanel: NSPanel {
     /// Accept first responder for touch/mouse events.
     override var acceptsFirstResponder: Bool { true }
 
+    /// Guard against focus stealing whenever the panel becomes key.
+    /// This catches all code paths — mouseDown, TouchRemapper delivery,
+    /// SwiftUI internal calls — ensuring we never reorder windows.
+    override func becomeKey() {
+        NSApp.preventWindowOrdering()
+        super.becomeKey()
+    }
+
+    // MARK: - Delivery Confirmation
+
+    /// Number of touch events received by the panel (mouseDown + mouseDragged + mouseUp).
+    /// Compare with TouchRemapper's delivery count to detect drops.
+    private(set) var receivedEventCount: Int = 0
+
+    /// Callback invoked when a touch event is received. Used by the flight recorder
+    /// to confirm delivery and measure latency.
+    var onEventReceived: ((_ type: NSEvent.EventType) -> Void)?
+
     // MARK: - Event Handling
 
     /// Ensure the panel becomes key when clicked/touched so that SwiftUI's
@@ -93,6 +111,11 @@ class LedgePanel: NSPanel {
     /// steal focus from the foreground app — it only makes this panel the
     /// key window (receives input) without becoming the main window.
     override func mouseDown(with event: NSEvent) {
+        receivedEventCount += 1
+        onEventReceived?(.leftMouseDown)
+        // Prevent macOS from reordering windows — without this, AppKit may
+        // bring the Ledge app forward in the window list, stealing focus.
+        NSApp.preventWindowOrdering()
         if !isKeyWindow {
             makeKey()
         }
@@ -100,6 +123,18 @@ class LedgePanel: NSPanel {
         // to the NSHostingView (SwiftUI). Do NOT manually forward to contentView
         // — that bypasses the responder chain and breaks gesture recognisers.
         super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        receivedEventCount += 1
+        onEventReceived?(.leftMouseDragged)
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        receivedEventCount += 1
+        onEventReceived?(.leftMouseUp)
+        super.mouseUp(with: event)
     }
 
     // MARK: - Transparency

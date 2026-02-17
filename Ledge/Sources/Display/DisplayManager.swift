@@ -51,6 +51,12 @@ class DisplayManager: ObservableObject {
     /// IOKit HID-based touchscreen detector — identifies the device without manual calibration.
     private let hidDetector = HIDTouchDetector()
 
+    /// Flight recorder capturing recent touch events for diagnostics.
+    let flightRecorder = TouchFlightRecorder()
+
+    /// Watchdog timer that monitors CGEventTap health independently of the callback.
+    let touchWatchdog = TouchWatchdog()
+
     /// Whether Accessibility permissions have been granted (required for CGEventTap).
     @Published private(set) var accessibilityPermission: AccessibilityPermission = .unknown
 
@@ -227,7 +233,12 @@ class DisplayManager: ObservableObject {
     /// Actually make the panel visible. Called directly (no fullscreen helper needed)
     /// or after the fullscreen helper finishes its transition.
     private func revealPanel(on screen: NSScreen) {
-        panel?.makeKeyAndOrderFront(nil)
+        // Use orderFrontRegardless + makeKey separately instead of makeKeyAndOrderFront.
+        // makeKeyAndOrderFront can trigger app activation even on .nonactivatingPanel.
+        // orderFrontRegardless brings the panel forward without activating the app.
+        NSApp.preventWindowOrdering()
+        panel?.orderFrontRegardless()
+        panel?.makeKey()
         isActive = true
         statusMessage = "Active on \(screen.localizedName)"
         logger.info("Panel is now visible on Xeneon Edge")
@@ -287,9 +298,10 @@ class DisplayManager: ObservableObject {
 
         if let currentScreen = xeneonScreen {
             if currentScreen != previousScreen {
-                // Screen changed (e.g., rearranged) — reposition
-                logger.info("Xeneon Edge repositioned, updating panel frame")
+                // Screen changed (e.g., rearranged) — reposition panel AND update touch remapper
+                logger.info("Xeneon Edge repositioned, updating panel frame and touch target")
                 panel?.reposition(on: currentScreen)
+                touchRemapper.updateTargetScreen(currentScreen)
             }
         } else if previousScreen != nil {
             // Xeneon Edge was disconnected
@@ -325,6 +337,7 @@ class DisplayManager: ObservableObject {
     /// Stop the touch remapper and reset all touch state.
     func stopTouchRemapper() {
         touchRemapper.stop()
+        touchWatchdog.stop()
         tearDownPermissionPolling()
         isTouchRemapperActive = false
         calibrationState = .notStarted
@@ -372,20 +385,39 @@ class DisplayManager: ObservableObject {
             calibrationState = .notStarted
         }
 
-        // Wire up the debug event callback
-        touchRemapper.onEventProcessed = { [weak self] deviceID, original, remapped in
+        // Wire up the diagnostics event callback — feeds both lastTouchInfo (UI) and flight recorder
+        touchRemapper.onEventProcessed = { [weak self] deviceID, original, remapped, eventTypeRaw, delivered, seqID, arrivalTime in
+            // Record in flight recorder (thread-safe, fast)
+            let entry = TouchFlightRecorder.Entry(
+                timestamp: arrivalTime,
+                sequenceID: seqID,
+                deviceID: deviceID,
+                originalPoint: original,
+                remappedPoint: remapped,
+                eventType: .init(cgEventType: eventTypeRaw),
+                deliveryStatus: delivered ? .delivered : .dropped,
+                deliveryLatencyMs: nil  // Updated by panel delivery confirmation
+            )
+            self?.flightRecorder.append(entry)
+
+            // Update UI state on MainActor
             Task { @MainActor in
                 self?.lastTouchInfo = TouchEventInfo(
                     deviceID: deviceID,
                     originalPoint: original,
                     remappedPoint: remapped,
-                    timestamp: Date()
+                    timestamp: arrivalTime
                 )
             }
         }
 
         touchRemapper.start(targetScreen: screen)
         isTouchRemapperActive = touchRemapper.isActive
+
+        // Start the watchdog to monitor event tap health
+        if let tap = touchRemapper.eventTap {
+            touchWatchdog.start(tap: tap)
+        }
 
         if touchRemapper.isActive {
             if calibrationState == .autoDetected {
@@ -595,8 +627,10 @@ class DisplayManager: ObservableObject {
         // Observe fullscreen entry BEFORE triggering the transition
         observeFullscreenEntry(completion: completion)
 
-        // Show and enter fullscreen
-        helper.orderFront(nil)
+        // Show and enter fullscreen.
+        // Use orderFrontRegardless instead of orderFront to avoid activating the app.
+        NSApp.preventWindowOrdering()
+        helper.orderFrontRegardless()
         helper.toggleFullScreen(nil)
 
         logger.info("Fullscreen helper created — entering fullscreen on \(screen.localizedName)")

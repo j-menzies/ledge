@@ -42,20 +42,13 @@ nonisolated class TouchRemapper {
         NSScreen.screens.first
     }
 
-    /// Convert an NSScreen frame from Cocoa coordinates (origin bottom-left, Y up)
-    /// to CG/Quartz coordinates (origin top-left of primary, Y down).
-    /// CGEvent.location uses CG coordinates, so we must work in that space.
+    /// Convert an NSScreen frame from Cocoa coordinates to CG/Quartz coordinates.
+    /// Delegates to `TouchCoordinateMath.cocoaToCGRect`.
     private func cgRect(for screen: NSScreen) -> CGRect {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else {
             return screen.frame
         }
-        let f = screen.frame
-        return CGRect(
-            x: f.origin.x,
-            y: primaryHeight - f.origin.y - f.height,
-            width: f.width,
-            height: f.height
-        )
+        return TouchCoordinateMath.cocoaToCGRect(screen.frame, primaryHeight: primaryHeight)
     }
 
     /// The CGEventTap Mach port.
@@ -83,9 +76,16 @@ nonisolated class TouchRemapper {
     /// Callback invoked when learning completes.
     var onLearningComplete: (() -> Void)?
 
-    /// Callback invoked when a touchscreen event is processed (for debug display).
-    /// Parameters: device ID, original coordinates, remapped coordinates (nil if remapping failed).
-    var onEventProcessed: ((_ deviceID: Int64, _ original: CGPoint, _ remapped: CGPoint?) -> Void)?
+    /// Callback invoked when a touchscreen event is processed (for diagnostics).
+    /// Parameters: device ID, original coordinates, remapped coordinates (nil if failed),
+    /// event type raw value, delivery status, sequence ID, timestamp of CGEvent arrival.
+    var onEventProcessed: ((_ deviceID: Int64,
+                            _ original: CGPoint,
+                            _ remapped: CGPoint?,
+                            _ eventTypeRaw: UInt32,
+                            _ delivered: Bool,
+                            _ sequenceID: UInt64,
+                            _ arrivalTime: Date) -> Void)?
 
     // MARK: - Touch Sequence State
 
@@ -201,6 +201,17 @@ nonisolated class TouchRemapper {
         logger.notice("Touch device IDs set: \(ids.sorted())")
     }
 
+    /// Update the target screen reference when the display configuration changes.
+    ///
+    /// Must be called from `DisplayManager.handleDisplayChange()` after repositioning
+    /// the panel. Without this, touch coordinates remap to stale screen geometry.
+    func updateTargetScreen(_ screen: NSScreen) {
+        let oldTarget = targetScreen.map { cgRect(for: $0) }
+        targetScreen = screen
+        let newTarget = cgRect(for: screen)
+        logger.notice("Target screen updated: \(screen.localizedName) CG origin=(\(Int(newTarget.origin.x)),\(Int(newTarget.origin.y))) size=\(Int(newTarget.width))×\(Int(newTarget.height)) (was \(oldTarget.map { "(\(Int($0.origin.x)),\(Int($0.origin.y)))" } ?? "nil"))")
+    }
+
     // MARK: - Coordinate Remapping
 
     /// Remap a point from primary display CG coordinates to the target display CG coordinates.
@@ -219,24 +230,7 @@ nonisolated class TouchRemapper {
         let sourceRect = cgRect(for: primary)
         let targetRect = cgRect(for: target)
 
-        guard sourceRect.width > 0, sourceRect.height > 0 else {
-            return nil
-        }
-
-        // Normalise the touch coordinates relative to the primary display (CG space)
-        let normX = (point.x - sourceRect.origin.x) / sourceRect.width
-        let normY = (point.y - sourceRect.origin.y) / sourceRect.height
-
-        // Only remap if the normalised coordinates are in [0, 1]
-        guard normX >= 0, normX <= 1, normY >= 0, normY <= 1 else {
-            return nil
-        }
-
-        // Map to the target display in CG coordinates
-        let remappedX = targetRect.origin.x + normX * targetRect.width
-        let remappedY = targetRect.origin.y + normY * targetRect.height
-
-        return CGPoint(x: remappedX, y: remappedY)
+        return TouchCoordinateMath.remapPoint(from: sourceRect, to: targetRect, point: point)
     }
 
     // MARK: - Event Processing
@@ -287,10 +281,14 @@ nonisolated class TouchRemapper {
         // This IS from the touchscreen device — suppress and deliver to panel.
         // ══════════════════════════════════════════════════════════════════
 
+        // Capture arrival time for latency measurement
+        let arrivalTime = Date()
+
         // mouseMoved from the touchscreen is hover noise — touchscreens don't
         // have meaningful hover state. Suppress without delivering.
         // (mouseDragged is different — that's finger-on-screen movement.)
         if eventType == .mouseMoved && !isTrackingTouch {
+            onEventProcessed?(deviceID, location, nil, eventType.rawValue, false, touchSequenceID, arrivalTime)
             return nil
         }
 
@@ -306,6 +304,7 @@ nonisolated class TouchRemapper {
                 if isKeyEvent {
                     logger.warning("⚠ [seq \(self.touchSequenceID)] DROP \(typeName) device=\(deviceID) at (\(Int(location.x)),\(Int(location.y))) — cannot remap")
                 }
+                onEventProcessed?(deviceID, location, nil, eventType.rawValue, false, touchSequenceID, arrivalTime)
                 return nil
             }
             edgePoint = remapped
@@ -342,7 +341,7 @@ nonisolated class TouchRemapper {
             moveLogCounter = 0
         }
 
-        onEventProcessed?(deviceID, location, edgePoint)
+        onEventProcessed?(deviceID, location, edgePoint, eventType.rawValue, true, touchSequenceID, arrivalTime)
 
         // Suppress the original event — the OS never sees it
         return nil
@@ -350,17 +349,14 @@ nonisolated class TouchRemapper {
 
     // MARK: - Direct NSEvent Delivery
 
-    /// Convert a CG point (origin top-left, Y down) to window-local Cocoa coordinates
-    /// (origin bottom-left of window, Y up).
+    /// Convert a CG point to window-local Cocoa coordinates.
+    /// Delegates to `TouchCoordinateMath.cgPointToWindowLocal`.
     private func cgPointToWindowLocal(_ cgPoint: CGPoint, in window: NSWindow) -> NSPoint {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        // CG to Cocoa global: Y flips around primary display height
-        let cocoaGlobalY = primaryHeight - cgPoint.y
-        // Cocoa global to window-local: subtract window origin
-        let frame = window.frame
-        return NSPoint(
-            x: cgPoint.x - frame.origin.x,
-            y: cocoaGlobalY - frame.origin.y
+        return TouchCoordinateMath.cgPointToWindowLocal(
+            cgPoint,
+            windowFrame: window.frame,
+            primaryHeight: primaryHeight
         )
     }
 

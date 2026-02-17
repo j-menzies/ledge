@@ -7,10 +7,18 @@ import os.log
 /// read mic/camera state and toggle controls. Requires Automation permission
 /// for Chrome (macOS prompts on first use).
 ///
-/// Must be `nonisolated` — NSAppleScript blocks the calling thread.
+/// Must be `nonisolated` — NSAppleScript blocks the calling thread, and the
+/// project default actor isolation is MainActor. Callers should dispatch
+/// from a background context (`Task.detached` or an actor).
 nonisolated class GoogleMeetBridge: @unchecked Sendable {
 
-    private let logger = Logger(subsystem: "com.ledge.app", category: "GoogleMeetBridge")
+    private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "GoogleMeetBridge")
+
+    /// Serial queue for all AppleScript execution. NSAppleScript is not thread-safe
+    /// and requires consistent thread affinity for AppleEvent dispatch. Shared with
+    /// SpotifyBridge via `AppleScriptQueue.shared` to prevent concurrent AppleScript
+    /// execution across different bridges from crashing the runtime.
+    private let scriptQueue = AppleScriptQueue.shared
 
     struct MeetState: Sendable {
         var chromeRunning: Bool = false
@@ -144,17 +152,21 @@ nonisolated class GoogleMeetBridge: @unchecked Sendable {
         _ = runAppleScriptWithError(script)
     }
 
+    /// Execute AppleScript synchronously on the shared serial script queue.
+    /// All NSAppleScript usage goes through the same queue for thread safety.
     private func runAppleScriptWithError(_ source: String) -> (String?, Int) {
-        let appleScript = NSAppleScript(source: source)
-        var errorDict: NSDictionary?
-        let result = appleScript?.executeAndReturnError(&errorDict)
+        scriptQueue.sync { [logger] in
+            let appleScript = NSAppleScript(source: source)
+            var errorDict: NSDictionary?
+            let result = appleScript?.executeAndReturnError(&errorDict)
 
-        if let error = errorDict {
-            let errorNumber = error["NSAppleScriptErrorNumber"] as? Int ?? 0
-            logger.debug("AppleScript error \(errorNumber): \(error)")
-            return (nil, errorNumber)
+            if let error = errorDict {
+                let errorNumber = error["NSAppleScriptErrorNumber"] as? Int ?? 0
+                logger.debug("AppleScript error \(errorNumber): \(error)")
+                return (nil, errorNumber)
+            }
+
+            return (result?.stringValue, 0)
         }
-
-        return (result?.stringValue, 0)
     }
 }

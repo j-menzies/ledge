@@ -78,10 +78,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logger.warning("Xeneon Edge not found on launch — panel not shown")
         }
 
-        // Start as .accessory (hidden from Dock/CMD+TAB) then observe window changes
+        // Start as .accessory (hidden from Dock/CMD+TAB) then observe window changes.
+        // IMPORTANT: Do NOT call NSApp.activate() here — it steals focus from the
+        // foreground app. The panel uses .nonactivatingPanel precisely to avoid this.
         DispatchQueue.main.async {
             NSApp.setActivationPolicy(.accessory)
-            NSApp.activate(ignoringOtherApps: true)
             self.observeSettingsWindow()
         }
     }
