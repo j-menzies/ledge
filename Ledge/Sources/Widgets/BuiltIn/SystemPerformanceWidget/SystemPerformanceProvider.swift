@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import IOKit
 import os.log
 
 /// Collects system performance metrics (CPU, Memory, Disk, Network) using Darwin APIs.
@@ -20,6 +21,8 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
         var diskUsed: Double = 0        // GB
         var diskTotal: Double = 0       // GB
         var diskPercent: Double = 0     // 0-100%
+        var diskReadBytesPerSec: Double = 0
+        var diskWriteBytesPerSec: Double = 0
         var networkDownBytesPerSec: Double = 0
         var networkUpBytesPerSec: Double = 0
     }
@@ -31,6 +34,14 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
     // Previous CPU ticks for delta calculation — access ONLY on stateQueue
     private nonisolated(unsafe) var previousCPUInfo: processor_info_array_t?
     private nonisolated(unsafe) var previousCPUInfoCount: mach_msg_type_number_t = 0
+
+    // Previous disk I/O snapshot for delta calculation — access ONLY on stateQueue
+    private struct DiskIOSnapshot {
+        var bytesRead: UInt64 = 0
+        var bytesWritten: UInt64 = 0
+        var timestamp: Date = Date()
+    }
+    private nonisolated(unsafe) var previousDiskIOSnapshot: DiskIOSnapshot?
 
     // Previous network snapshot for delta calculation — access ONLY on stateQueue
     private struct NetworkSnapshot {
@@ -49,6 +60,9 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
             m.cpuUsage = collectCPU()
             (m.memoryUsed, m.memoryTotal, m.memoryPercent) = collectMemory()
             (m.diskUsed, m.diskTotal, m.diskPercent) = collectDisk()
+            let diskIO = collectDiskIO()
+            m.diskReadBytesPerSec = diskIO.read
+            m.diskWriteBytesPerSec = diskIO.write
             let net = collectNetwork()
             m.networkDownBytesPerSec = net.down
             m.networkUpBytesPerSec = net.up
@@ -152,6 +166,70 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
         let percent = (usedGB / totalGB) * 100.0
 
         return (usedGB, totalGB, percent)
+    }
+
+    // MARK: - Disk I/O
+
+    private func collectDiskIO() -> (read: Double, write: Double) {
+        let current = takeDiskIOSnapshot()
+        defer { previousDiskIOSnapshot = current }
+
+        guard let prev = previousDiskIOSnapshot else { return (0, 0) }
+
+        let elapsed = current.timestamp.timeIntervalSince(prev.timestamp)
+        guard elapsed > 0 else { return (0, 0) }
+
+        let readDelta = current.bytesRead >= prev.bytesRead ? current.bytesRead - prev.bytesRead : current.bytesRead
+        let writeDelta = current.bytesWritten >= prev.bytesWritten ? current.bytesWritten - prev.bytesWritten : current.bytesWritten
+
+        return (
+            read: Double(readDelta) / elapsed,
+            write: Double(writeDelta) / elapsed
+        )
+    }
+
+    private func takeDiskIOSnapshot() -> DiskIOSnapshot {
+        var snapshot = DiskIOSnapshot()
+
+        // Use iostat-style approach: read from sysctl kern.devstat or
+        // iterate IOKit's IOBlockStorageDriver statistics
+        guard let matching = IOServiceMatching("IOBlockStorageDriver") else { return snapshot }
+
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
+            return snapshot
+        }
+        defer { IOObjectRelease(iterator) }
+
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            defer {
+                IOObjectRelease(entry)
+                entry = IOIteratorNext(iterator)
+            }
+
+            guard let props = getProperties(for: entry),
+                  let stats = props["Statistics"] as? [String: Any] else { continue }
+
+            if let bytesRead = stats["Bytes (Read)"] as? UInt64 {
+                snapshot.bytesRead += bytesRead
+            }
+            if let bytesWritten = stats["Bytes (Write)"] as? UInt64 {
+                snapshot.bytesWritten += bytesWritten
+            }
+        }
+
+        snapshot.timestamp = Date()
+        return snapshot
+    }
+
+    private func getProperties(for service: io_object_t) -> [String: Any]? {
+        var props: Unmanaged<CFMutableDictionary>?
+        guard IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+              let dict = props?.takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+        return dict
     }
 
     // MARK: - Network (WiFi / en0)

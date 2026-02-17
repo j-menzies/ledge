@@ -140,7 +140,10 @@ enum DashboardBackgroundMode: String, Codable, CaseIterable {
 class ThemeManager {
 
     var mode: ThemeMode = .dark {
-        didSet { save() }
+        didSet {
+            guard isLoaded else { return }
+            saveKey(key, value: mode.rawValue)
+        }
     }
 
     /// The resolved theme, accounting for system appearance in auto mode.
@@ -158,17 +161,27 @@ class ThemeManager {
 
     /// How widget backgrounds are rendered.
     var widgetBackgroundStyle: WidgetBackgroundStyle = .solid {
-        didSet { save() }
+        didSet {
+            guard isLoaded else { return }
+            saveKey(bgStyleKey, value: widgetBackgroundStyle.rawValue)
+        }
     }
 
     /// What's shown behind the widget grid.
     var dashboardBackgroundMode: DashboardBackgroundMode = .themeColor {
-        didSet { save() }
+        didSet {
+            guard isLoaded else { return }
+            saveKey(bgModeKey, value: dashboardBackgroundMode.rawValue)
+        }
     }
 
     /// Path to a custom background image (when dashboardBackgroundMode == .image).
     var backgroundImagePath: String = "" {
-        didSet { save(); loadBackgroundImage() }
+        didSet {
+            guard isLoaded else { return }
+            saveKey(bgImageKey, value: backgroundImagePath)
+            loadBackgroundImage()
+        }
     }
 
     /// The loaded background NSImage, if any.
@@ -179,7 +192,11 @@ class ThemeManager {
     private let bgModeKey = "com.ledge.dashboardBackgroundMode"
     private let bgImageKey = "com.ledge.backgroundImagePath"
 
+    /// Guard against didSet firing during init (especially with @Observable)
+    private var isLoaded = false
+
     init() {
+        // Load all saved values before enabling persistence
         if let saved = UserDefaults.standard.string(forKey: key),
            let mode = ThemeMode(rawValue: saved) {
             self.mode = mode
@@ -189,21 +206,22 @@ class ThemeManager {
             self.widgetBackgroundStyle = style
         }
         if let saved = UserDefaults.standard.string(forKey: bgModeKey),
-           let mode = DashboardBackgroundMode(rawValue: saved) {
-            self.dashboardBackgroundMode = mode
+           let bgMode = DashboardBackgroundMode(rawValue: saved) {
+            self.dashboardBackgroundMode = bgMode
         }
         if let saved = UserDefaults.standard.string(forKey: bgImageKey), !saved.isEmpty {
             self.backgroundImagePath = saved
         }
         detectSystemAppearance()
         loadBackgroundImage()
+        // Enable persistence now that init is complete
+        isLoaded = true
     }
 
-    private func save() {
-        UserDefaults.standard.set(mode.rawValue, forKey: key)
-        UserDefaults.standard.set(widgetBackgroundStyle.rawValue, forKey: bgStyleKey)
-        UserDefaults.standard.set(dashboardBackgroundMode.rawValue, forKey: bgModeKey)
-        UserDefaults.standard.set(backgroundImagePath, forKey: bgImageKey)
+    /// Save a single key immediately and synchronize
+    private func saveKey(_ key: String, value: String) {
+        UserDefaults.standard.set(value, forKey: key)
+        UserDefaults.standard.synchronize()
     }
 
     func detectSystemAppearance() {

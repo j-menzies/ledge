@@ -754,10 +754,15 @@ private struct MarqueeText: View {
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
 
+    /// The text actually displayed — lags behind `text` so the old string
+    /// is visible during the fade-out phase before swapping to the new one.
+    @State private var displayText: String = ""
     /// Controls the left-to-right reveal sweep (0 = hidden, 1 = fully visible).
     @State private var revealProgress: CGFloat = 1.0
-    /// The previously displayed text — used to detect actual content changes.
-    @State private var previousText: String = ""
+    /// Controls the overall text opacity for fade-out / fade-in transitions.
+    @State private var textOpacity: CGFloat = 1.0
+    /// True while a transition is in progress (prevents overlapping animations).
+    @State private var isTransitioning = false
 
     /// Only scroll if the text overflows by more than 10pt.
     /// Prevents unnecessary scrolling for tiny measurement differences
@@ -795,25 +800,42 @@ private struct MarqueeText: View {
                 }
             }
             .onChange(of: text) { oldValue, newValue in
-                // Only animate reveal when the actual content changes
-                // (not on re-renders with the same text)
+                // Only animate when the actual content changes
                 if oldValue != newValue && !newValue.isEmpty {
-                    revealProgress = 0
-                    withAnimation(.easeOut(duration: 0.5)) {
-                        revealProgress = 1.0
+                    guard !isTransitioning else { return }
+                    isTransitioning = true
+
+                    // Phase 1: Fade out the OLD text (1 second)
+                    // displayText still shows the old string here
+                    withAnimation(.easeIn(duration: 1.0)) {
+                        textOpacity = 0
+                    }
+
+                    // Phase 2: After fade-out, swap to new text and fade in (2 seconds)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        displayText = newValue
+                        revealProgress = 0
+                        withAnimation(.easeOut(duration: 2.0)) {
+                            textOpacity = 1.0
+                            revealProgress = 1.0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            isTransitioning = false
+                        }
                     }
                 }
             }
             .onAppear {
-                previousText = text
+                displayText = text
             }
     }
 
     private var innerText: some View {
-        Text(text)
+        Text(displayText)
             .font(font)
             .foregroundStyle(color)
             .fixedSize(horizontal: true, vertical: false)
+            .opacity(textOpacity)
             .mask(revealMask)
             .background(
                 GeometryReader { geo in

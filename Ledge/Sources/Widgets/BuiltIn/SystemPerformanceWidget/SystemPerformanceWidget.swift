@@ -42,6 +42,8 @@ struct SystemPerformanceWidgetView: View {
     @State private var metrics = SystemPerformanceProvider.Metrics()
     @State private var cpuHistory: [Double] = []
     @State private var memHistory: [Double] = []
+    @State private var diskReadHistory: [Double] = []
+    @State private var diskWriteHistory: [Double] = []
     @State private var downloadHistory: [Double] = []
     @State private var uploadHistory: [Double] = []
 
@@ -80,6 +82,7 @@ struct SystemPerformanceWidgetView: View {
                     percent: metrics.cpuUsage / 100.0,
                     history: cpuHistory,
                     color: cpuColor,
+                    sparklineColor: .mint,
                     theme: theme
                 )
             }
@@ -88,21 +91,24 @@ struct SystemPerformanceWidgetView: View {
                 MetricCard(
                     icon: "memorychip",
                     label: "Memory",
-                    value: String(format: "%.1f / %.0f GB", metrics.memoryUsed, metrics.memoryTotal),
+                    value: String(format: "%.1f / %.0f GB  %.0f%%", metrics.memoryUsed, metrics.memoryTotal, metrics.memoryPercent),
                     percent: metrics.memoryPercent / 100.0,
                     history: memHistory,
                     color: memColor,
+                    sparklineColor: .cyan,
                     theme: theme
                 )
             }
 
             if config.showDisk {
-                MetricCard(
-                    icon: "internaldrive",
-                    label: "Disk",
-                    value: String(format: "%.0f / %.0f GB", metrics.diskUsed, metrics.diskTotal),
-                    percent: metrics.diskPercent / 100.0,
-                    history: [],
+                DiskCard(
+                    readHistory: diskReadHistory,
+                    writeHistory: diskWriteHistory,
+                    currentRead: metrics.diskReadBytesPerSec,
+                    currentWrite: metrics.diskWriteBytesPerSec,
+                    diskUsed: metrics.diskUsed,
+                    diskTotal: metrics.diskTotal,
+                    diskPercent: metrics.diskPercent / 100.0,
                     color: diskColor,
                     theme: theme
                 )
@@ -206,6 +212,12 @@ struct SystemPerformanceWidgetView: View {
                 memHistory.append(m.memoryPercent / 100.0)
                 if memHistory.count > maxHistory { memHistory.removeFirst() }
 
+                diskReadHistory.append(m.diskReadBytesPerSec)
+                if diskReadHistory.count > maxHistory { diskReadHistory.removeFirst() }
+
+                diskWriteHistory.append(m.diskWriteBytesPerSec)
+                if diskWriteHistory.count > maxHistory { diskWriteHistory.removeFirst() }
+
                 downloadHistory.append(m.networkDownBytesPerSec)
                 if downloadHistory.count > maxHistory { downloadHistory.removeFirst() }
 
@@ -222,7 +234,61 @@ struct SystemPerformanceWidgetView: View {
     }
 }
 
+// MARK: - Vertical Bar Background
+//
+// Reusable full-height vertical bar (width = percentage) with a short sharp
+// trailing fade. 85% solid, 15% fade-out.
+
+private struct VerticalBarBackground: View {
+    let percent: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let barWidth = geo.size.width * min(max(percent, 0), 1.0)
+            HStack(spacing: 0) {
+                Rectangle()
+                    .fill(color.opacity(0.30))
+                    .frame(width: max(barWidth * 0.85, 0))
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [color.opacity(0.30), color.opacity(0)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(barWidth * 0.15, 0))
+                Spacer(minLength: 0)
+            }
+            .animation(.easeInOut(duration: 1.0), value: percent)
+        }
+    }
+}
+
+// MARK: - Rate Label (arrow + rate, no text label, no background)
+
+private struct RateLabel: View {
+    let direction: String  // "arrow.up" or "arrow.down"
+    let rate: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: direction)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(color)
+            Text(rate)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(color)
+        }
+    }
+}
+
 // MARK: - Metric Card (Full Layout)
+//
+// No header row. Sparkline fills the entire card. Icon+label top-left,
+// value bottom-left — all overlaid on the graph. 2px margins.
 
 private struct MetricCard: View {
     let icon: String
@@ -231,46 +297,114 @@ private struct MetricCard: View {
     let percent: Double
     let history: [Double]
     let color: Color
+    let sparklineColor: Color
     let theme: LedgeTheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundColor(color)
-                    .frame(width: 18)
-                Text(label)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(theme.secondaryText)
-                Spacer()
-                Text(value)
-                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                    .foregroundColor(theme.primaryText)
-            }
+        GeometryReader { geo in
+            ZStack {
+                // Full-height vertical bar background
+                VerticalBarBackground(percent: percent, color: color)
 
-            // Progress bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(theme.primaryText.opacity(0.1))
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(color)
-                        .frame(width: geo.size.width * min(percent, 1.0))
+                // Sparkline fills entire card
+                if !history.isEmpty {
+                    SparklineView(data: history, color: sparklineColor)
                 }
             }
-            .frame(height: 6)
-
-            // Sparkline graph
-            if !history.isEmpty {
-                SparklineView(data: history, color: color)
-                    .frame(height: 30)
+            .overlay(alignment: .topLeading) {
+                // Icon + label — top-left
+                HStack(spacing: 4) {
+                    Image(systemName: icon)
+                        .font(.system(size: 13))
+                        .foregroundColor(color)
+                    Text(label)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.secondaryText)
+                }
+                .padding(2)
             }
+            .overlay(alignment: .bottomLeading) {
+                // Value — bottom-left
+                Text(value)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(theme.primaryText)
+                    .padding(2)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+}
+
+// MARK: - Disk Card
+//
+// No header row. Bandwidth graph fills entire card. All labels overlaid.
+// Icon+label top-left, ↑ Read top-right (cyan),
+// usage bottom-left, ↓ Write bottom-right (orange). 2px margins.
+
+private struct DiskCard: View {
+    let readHistory: [Double]
+    let writeHistory: [Double]
+    let currentRead: Double
+    let currentWrite: Double
+    let diskUsed: Double
+    let diskTotal: Double
+    let diskPercent: Double
+    let color: Color
+    let theme: LedgeTheme
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                // Full-height vertical bar background
+                VerticalBarBackground(percent: diskPercent, color: color)
+
+                // Bandwidth graph fills entire card
+                BandwidthGraphView(
+                    downloadHistory: readHistory,
+                    uploadHistory: writeHistory,
+                    isVertical: geo.size.height > geo.size.width,
+                    theme: theme
+                )
+            }
+            .overlay(alignment: .topLeading) {
+                // Icon + label — top-left
+                HStack(spacing: 4) {
+                    Image(systemName: "internaldrive")
+                        .font(.system(size: 13))
+                        .foregroundColor(color)
+                    Text("Disk")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.secondaryText)
+                }
+                .padding(2)
+            }
+            .overlay(alignment: .topTrailing) {
+                // ↑ Read — top-right, arrow up, cyan
+                RateLabel(direction: "arrow.up", rate: formatRate(currentRead), color: .cyan)
+                    .padding(2)
+            }
+            .overlay(alignment: .bottomLeading) {
+                // Usage info — bottom-left
+                Text(String(format: "%.0f / %.0f GB  %.0f%%", diskUsed, diskTotal, diskPercent * 100))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(theme.primaryText)
+                    .padding(2)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                // ↓ Write — bottom-right, arrow down, orange
+                RateLabel(direction: "arrow.down", rate: formatRate(currentWrite), color: .orange)
+                    .padding(2)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
     }
 }
 
 // MARK: - Network Card
+//
+// No header row. Bandwidth graph fills entire card. All labels overlaid.
+// Icon+label top-left, ↑ Send top-right (orange),
+// ↓ Receive bottom-right (cyan). 2px margins.
 
 private struct NetworkCard: View {
     let downloadHistory: [Double]
@@ -280,48 +414,38 @@ private struct NetworkCard: View {
     let theme: LedgeTheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header with current rates
-            HStack {
-                Image(systemName: "wifi")
-                    .font(.system(size: 14))
-                    .foregroundColor(.cyan)
-                    .frame(width: 18)
-                Text("Network")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(theme.secondaryText)
-                Spacer()
-                HStack(spacing: 10) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.cyan)
-                        Text(formatRate(currentDown))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.cyan)
-                    }
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.orange)
-                        Text(formatRate(currentUp))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.orange)
-                    }
-                }
-            }
-
-            // Bidirectional graph
-            GeometryReader { geo in
-                let isVertical = geo.size.height > geo.size.width
+        GeometryReader { geo in
+            ZStack {
+                // Bandwidth graph fills entire card
                 BandwidthGraphView(
                     downloadHistory: downloadHistory,
                     uploadHistory: uploadHistory,
-                    isVertical: isVertical,
+                    isVertical: geo.size.height > geo.size.width,
                     theme: theme
                 )
             }
-            .frame(minHeight: 50)
+            .overlay(alignment: .topLeading) {
+                // Icon + label — top-left
+                HStack(spacing: 4) {
+                    Image(systemName: "wifi")
+                        .font(.system(size: 13))
+                        .foregroundColor(.cyan)
+                    Text("Network")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(theme.secondaryText)
+                }
+                .padding(2)
+            }
+            .overlay(alignment: .topTrailing) {
+                // ↑ Send (upload) — top-right, cyan to match graph top half
+                RateLabel(direction: "arrow.up", rate: formatRate(currentUp), color: .cyan)
+                    .padding(2)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                // ↓ Receive (download) — bottom-right, orange to match graph bottom half
+                RateLabel(direction: "arrow.down", rate: formatRate(currentDown), color: .orange)
+                    .padding(2)
+            }
         }
     }
 }
@@ -516,6 +640,9 @@ private struct CompactMetric: View {
 }
 
 // MARK: - Sparkline Graph
+//
+// Brighter stroke (2pt) and slightly more opaque fill for better contrast
+// when rendered on top of the tinted vertical bar.
 
 private struct SparklineView: View {
     let data: [Double]
@@ -527,21 +654,7 @@ private struct SparklineView: View {
             let height = geometry.size.height
 
             if data.count > 1 {
-                // Line
-                Path { path in
-                    for (index, value) in data.enumerated() {
-                        let x = width * Double(index) / Double(data.count - 1)
-                        let y = height * (1 - min(value, 1.0))
-                        if index == 0 {
-                            path.move(to: CGPoint(x: x, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: x, y: y))
-                        }
-                    }
-                }
-                .stroke(color, lineWidth: 1.5)
-
-                // Fill
+                // Fill (rendered first, behind the line)
                 Path { path in
                     path.move(to: CGPoint(x: 0, y: height))
                     for (index, value) in data.enumerated() {
@@ -554,11 +667,25 @@ private struct SparklineView: View {
                 }
                 .fill(
                     LinearGradient(
-                        colors: [color.opacity(0.3), color.opacity(0.05)],
+                        colors: [color.opacity(0.35), color.opacity(0.05)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
+
+                // Line (on top)
+                Path { path in
+                    for (index, value) in data.enumerated() {
+                        let x = width * Double(index) / Double(data.count - 1)
+                        let y = height * (1 - min(value, 1.0))
+                        if index == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                }
+                .stroke(color.opacity(0.9), lineWidth: 2)
             }
         }
     }
