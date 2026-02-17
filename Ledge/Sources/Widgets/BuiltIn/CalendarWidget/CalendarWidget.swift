@@ -46,10 +46,10 @@ struct CalendarWidgetView: View {
             HStack {
                 Image(systemName: "calendar")
                     .font(.system(size: 16))
-                    .foregroundColor(theme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                 Text(Date(), format: .dateTime.month(.wide).day().year())
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(theme.secondaryText)
+                    .foregroundStyle(theme.secondaryText)
                 Spacer()
             }
             .padding(.horizontal, 14)
@@ -62,13 +62,13 @@ struct CalendarWidgetView: View {
                     Spacer()
                     Image(systemName: "calendar.badge.exclamationmark")
                         .font(.system(size: 32))
-                        .foregroundColor(.orange.opacity(0.6))
+                        .foregroundStyle(.orange.opacity(0.6))
                     Text("Calendar Access Required")
                         .font(.system(size: 15))
-                        .foregroundColor(theme.secondaryText)
+                        .foregroundStyle(theme.secondaryText)
                     Text("Grant access in System Settings")
                         .font(.system(size: 13))
-                        .foregroundColor(theme.tertiaryText)
+                        .foregroundStyle(theme.tertiaryText)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -77,7 +77,7 @@ struct CalendarWidgetView: View {
                     Spacer()
                     Text("No upcoming events")
                         .font(.system(size: 16))
-                        .foregroundColor(theme.tertiaryText)
+                        .foregroundStyle(theme.tertiaryText)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -89,7 +89,7 @@ struct CalendarWidgetView: View {
                             // Day header
                             Text(dayLabel(group.date))
                                 .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(theme.secondaryText)
+                                .foregroundStyle(theme.secondaryText)
                                 .padding(.horizontal, 14)
                                 .padding(.top, 8)
 
@@ -135,25 +135,28 @@ struct CalendarWidgetView: View {
 
     private func eventRow(_ event: EventKitManager.CalendarEvent) -> some View {
         HStack(spacing: 10) {
-            // Calendar color indicator
+            // Calendar color indicator — stretches to match event row height
+            // Wrapped in a container to prevent .fill() from leaking foregroundStyle
             RoundedRectangle(cornerRadius: 2)
                 .fill(event.calendarColor.map { Color(cgColor: $0) } ?? .blue)
-                .frame(width: 4, height: 40)
+                .frame(width: 4)
+                .compositingGroup()
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(event.title)
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(theme.primaryText)
-                    .lineLimit(1)
+                    .foregroundStyle(theme.primaryText)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if event.isAllDay {
                     Text("All day")
                         .font(.system(size: 15))
-                        .foregroundColor(theme.tertiaryText)
+                        .foregroundStyle(theme.tertiaryText)
                 } else {
                     Text("\(event.startDate, format: .dateTime.hour().minute()) – \(event.endDate, format: .dateTime.hour().minute())")
                         .font(.system(size: 15, design: .monospaced))
-                        .foregroundColor(theme.tertiaryText)
+                        .foregroundStyle(theme.tertiaryText)
                 }
             }
 

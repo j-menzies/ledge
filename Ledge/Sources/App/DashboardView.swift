@@ -46,15 +46,33 @@ struct DashboardView: View {
         .onChange(of: layoutManager.activeLayout.id) { _, _ in
             flashPageIndicator()
         }
-        // Keep panel transparency in sync with the widget background style.
+        // Keep panel transparency in sync with the effective background style.
         // When Blur or Transparent, the panel must be non-opaque so the desktop
         // wallpaper (or background image) shows through gaps between widgets.
-        .onChange(of: themeManager.widgetBackgroundStyle) { _, newStyle in
-            displayManager.panel?.setTransparent(newStyle != .solid)
+        // Themes with a preferredBackgroundStyle (e.g. Liquid Glass → blur) also
+        // need the panel to be transparent.
+        .onChange(of: themeManager.widgetBackgroundStyle) { _, _ in
+            updatePanelTransparency()
         }
         .onChange(of: themeManager.dashboardBackgroundMode) { _, _ in
-            displayManager.panel?.setTransparent(themeManager.widgetBackgroundStyle != .solid)
+            updatePanelTransparency()
         }
+        .onChange(of: themeManager.mode) { _, _ in
+            updatePanelTransparency()
+        }
+        .onAppear {
+            updatePanelTransparency()
+        }
+    }
+
+    // MARK: - Panel Transparency
+
+    /// Determines whether the panel needs to be transparent based on the
+    /// effective background style (user setting or theme override).
+    private func updatePanelTransparency() {
+        let effectiveStyle = themeManager.resolvedTheme.preferredBackgroundStyle
+            ?? themeManager.widgetBackgroundStyle
+        displayManager.panel?.setTransparent(effectiveStyle != .solid)
     }
 
     // MARK: - Swipe Gesture

@@ -9,7 +9,7 @@ import os.log
 /// Must be `nonisolated` — CoreAudio calls may block briefly.
 nonisolated class SystemAudioBridge: @unchecked Sendable {
 
-    private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SystemAudio")
+    private let logger = Logger(subsystem: "com.ledge.app", category: "SystemAudio")
 
     struct AudioState: Sendable {
         var outputVolume: Float = 0     // 0.0 - 1.0
@@ -127,11 +127,12 @@ nonisolated class SystemAudioBridge: @unchecked Sendable {
                     mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
                     mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
                 )
-                var name: CFString = "" as CFString
-                var nameSize = UInt32(MemoryLayout<CFString>.size)
+                var name: Unmanaged<CFString>?
+                var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
 
-                if CMIOObjectGetPropertyData(deviceID, &nameAddress, 0, nil, nameSize, &nameSize, &name) == noErr {
-                    return (true, name as String)
+                if CMIOObjectGetPropertyData(deviceID, &nameAddress, 0, nil, nameSize, &nameSize, &name) == noErr,
+                   let cfName = name?.takeUnretainedValue() {
+                    return (true, cfName as String)
                 }
                 return (true, nil)
             }

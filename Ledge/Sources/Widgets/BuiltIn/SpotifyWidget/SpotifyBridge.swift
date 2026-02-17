@@ -11,7 +11,7 @@ import os.log
 /// from a background context (`Task.detached` or an actor).
 nonisolated class SpotifyBridge: @unchecked Sendable {
 
-    private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SpotifyBridge")
+    private let logger = Logger(subsystem: "com.ledge.app", category: "SpotifyBridge")
 
     /// Serial queue for all AppleScript execution. NSAppleScript is not thread-safe
     /// and requires consistent thread affinity for AppleEvent dispatch. Shared with

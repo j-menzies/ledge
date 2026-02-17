@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import os
 
 /// Extracts dominant colors from album artwork for dynamic widget backgrounds.
 ///
@@ -13,19 +14,15 @@ nonisolated class AlbumColorExtractor: @unchecked Sendable {
         let isDark: Bool
     }
 
-    /// Cache of extracted colors keyed by artwork URL.
-    private nonisolated(unsafe) var cache: [String: Colors] = [:]
-    private nonisolated(unsafe) let lock = NSLock()
+    /// Thread-safe cache of extracted colors keyed by artwork URL.
+    private let cache = OSAllocatedUnfairLock(initialState: [String: Colors]())
 
     /// Extract dominant colors from an image URL.
     func extract(from urlString: String) async -> Colors? {
         // Check cache
-        lock.lock()
-        if let cached = cache[urlString] {
-            lock.unlock()
+        if let cached = cache.withLock({ $0[urlString] }) {
             return cached
         }
-        lock.unlock()
 
         guard let url = URL(string: urlString),
               let (data, _) = try? await URLSession.shared.data(from: url),
@@ -36,18 +33,14 @@ nonisolated class AlbumColorExtractor: @unchecked Sendable {
 
         let colors = analyzeImage(cgImage)
 
-        lock.lock()
-        cache[urlString] = colors
-        lock.unlock()
+        cache.withLock { $0[urlString] = colors }
 
         return colors
     }
 
     /// Clear the cache (e.g., when memory is low).
     func clearCache() {
-        lock.lock()
-        cache.removeAll()
-        lock.unlock()
+        cache.withLock { $0.removeAll() }
     }
 
     private func analyzeImage(_ cgImage: CGImage) -> Colors {

@@ -11,7 +11,7 @@ import os.log
 /// deallocated exactly once — a data race here causes a double-free crash.
 nonisolated class SystemPerformanceProvider: @unchecked Sendable {
 
-    private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "SystemPerformance")
+    private let logger = Logger(subsystem: "com.ledge.app", category: "SystemPerformance")
 
     struct Metrics: Sendable {
         var cpuUsage: Double = 0        // 0-100%
@@ -29,7 +29,7 @@ nonisolated class SystemPerformanceProvider: @unchecked Sendable {
 
     /// Serial queue protecting all mutable state (CPU info buffer, network snapshot).
     /// Prevents race conditions when overlapping Task.detached calls invoke collect().
-    private nonisolated(unsafe) let stateQueue = DispatchQueue(label: "com.ledge.SystemPerformanceProvider")
+    private let stateQueue = DispatchQueue(label: "com.ledge.SystemPerformanceProvider")
 
     // Previous CPU ticks for delta calculation — access ONLY on stateQueue
     private nonisolated(unsafe) var previousCPUInfo: processor_info_array_t?

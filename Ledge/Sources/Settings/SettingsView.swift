@@ -908,9 +908,15 @@ struct AppearanceSettingsView: View {
                 }
                 .pickerStyle(.radioGroup)
 
-                Text("Auto follows the system appearance (Dark/Light).")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if themeManager.mode == .auto {
+                    Text("Auto follows the system appearance — Liquid Glass in dark mode, Light in light mode.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if themeManager.mode == .liquidGlass {
+                    Text("Liquid Glass uses frosted blur backgrounds with specular highlights for a glass-morphism look. Works best with a background image.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
             Section("Widget Background") {
@@ -1001,7 +1007,7 @@ struct AppearanceSettingsView: View {
                         let isActive = themeManager.mode == mode
                         VStack(spacing: 6) {
                             ThemePreviewCard(theme: mode == .auto
-                                ? (themeManager.systemIsDark ? .dark : .light)
+                                ? (themeManager.systemIsDark ? .liquidGlass : .light)
                                 : mode.theme
                             )
                             .frame(height: 60)
@@ -1050,64 +1056,78 @@ struct ThemePreviewCard: View {
             theme.dashboardBackground
 
             HStack(spacing: 6) {
-                // Mock widget 1
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(theme.widgetBackground)
-                    .overlay(
-                        VStack(spacing: 4) {
-                            Text("10:54")
-                                .font(.system(size: 14, weight: .light, design: .rounded))
-                                .foregroundColor(theme.primaryText)
-                            Text("Thursday")
-                                .font(.system(size: 8))
-                                .foregroundColor(theme.secondaryText)
-                        }
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(theme.widgetBorderColor, lineWidth: theme.widgetBorderWidth)
-                    )
+                mockWidget {
+                    VStack(spacing: 4) {
+                        Text("10:54")
+                            .font(.system(size: 14, weight: .light, design: .rounded))
+                            .foregroundStyle(theme.primaryText)
+                        Text("Thursday")
+                            .font(.system(size: 8))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                }
 
-                // Mock widget 2
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(theme.widgetBackground)
-                    .overlay(
-                        VStack(spacing: 4) {
-                            Image(systemName: "cloud.sun.fill")
-                                .font(.system(size: 14))
-                                .foregroundColor(theme.primaryText)
-                                .symbolRenderingMode(.hierarchical)
-                            Text("-1°C")
-                                .font(.system(size: 10))
-                                .foregroundColor(theme.secondaryText)
-                        }
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(theme.widgetBorderColor, lineWidth: theme.widgetBorderWidth)
-                    )
+                mockWidget {
+                    VStack(spacing: 4) {
+                        Image(systemName: "cloud.sun.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(theme.primaryText)
+                            .symbolRenderingMode(.hierarchical)
+                        Text("-1°C")
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                }
 
-                // Mock widget 3
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(theme.widgetBackground)
-                    .overlay(
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Meeting")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(theme.primaryText)
-                            Text("10:30 - 11:00")
-                                .font(.system(size: 7))
-                                .foregroundColor(theme.tertiaryText)
-                        }
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(theme.widgetBorderColor, lineWidth: theme.widgetBorderWidth)
-                    )
+                mockWidget {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Meeting")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(theme.primaryText)
+                        Text("10:30 - 11:00")
+                            .font(.system(size: 7))
+                            .foregroundStyle(theme.tertiaryText)
+                    }
+                }
             }
             .padding(8)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Renders a mock widget tile with the theme's chrome — border, optional glass highlight, shadow.
+    private func mockWidget<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        let cr: CGFloat = 6
+        return RoundedRectangle(cornerRadius: cr)
+            .fill(theme.widgetBackground)
+            .overlay(content())
+            .overlay(
+                ZStack {
+                    RoundedRectangle(cornerRadius: cr)
+                        .strokeBorder(theme.widgetBorderColor, lineWidth: theme.widgetBorderWidth)
+
+                    if theme.glassInnerGlow {
+                        RoundedRectangle(cornerRadius: cr - 0.5, style: .continuous)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        theme.glassHighlightColor,
+                                        .clear
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 0.5
+                            )
+                            .padding(0.5)
+                    }
+                }
+            )
+            .shadow(
+                color: theme.glassShadowRadius > 0 ? theme.glassShadowColor.opacity(0.5) : .clear,
+                radius: theme.glassShadowRadius > 0 ? 4 : 0,
+                y: 2
+            )
     }
 }
 

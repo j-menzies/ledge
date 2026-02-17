@@ -118,7 +118,7 @@ The TouchRemapper intercepts ALL mouse events from the touchscreen via a CGEvent
 ### Visual Design
 
 - [x] **Transparent widget backgrounds with blur** — `NSVisualEffectView` integration via `VisualEffectBlur` SwiftUI wrapper. Three widget background modes: Solid, Blur, Transparent. Configurable in Settings > Appearance
-- [ ] **Liquid Glass design language** — adopt Apple's vibrancy, blur materials, glass-effect borders. Architectural change to the theme system
+- [x] **Liquid Glass design language** — new default theme with frosted blur backgrounds, specular top-edge highlight (LinearGradient inner glow), drop shadow, 16pt continuous corner radius. Theme system extended with glass-specific properties (`glassInnerGlow`, `glassHighlightColor`, `glassShadowRadius`, `preferredBackgroundStyle`). Auto-enables blur when active. Classic themes preserved as alternatives
 - [x] **Background images** — configurable wallpapers behind the widget grid via Settings > Appearance. Supports any image file; recommends 2560×720 for Xeneon Edge. Corsair iCUE wallpapers work well
 - [ ] **Widget transitions** — smooth animations when switching layouts, adding/removing widgets
 
@@ -251,60 +251,109 @@ The AppleScript bridge only sees the local Spotify desktop app. The Web API show
 1. **Phase 6 (now):** Development Mode — personal use + 5 beta testers
 2. **Post-App Store launch:** Apply for Extended Quota once user base grows. Until approved, AppleScript bridge is the default; Web API is opt-in for users who register their own Spotify app (common pattern for open-source/indie Spotify integrations)
 
-## Phase 7: App Store Preparation & Hardening 📋 FUTURE
+## Phase 7: Licensing & Commercial Distribution (Paddle) 📋 FUTURE
 
-**Goal:** Ship Ledge as a signed, notarised macOS app on the Mac App Store (or as a Developer ID-signed direct download if App Sandbox restrictions prove incompatible).
+**Goal:** Sell Ledge as a paid macOS app via direct distribution, using Paddle for payment processing, license key generation, and in-app license validation.
 
-### Distribution Strategy
+### Why Paddle
 
-CGEventTap and USB HID access require App Sandbox to be disabled, which **prevents Mac App Store distribution**. Two paths:
+CGEventTap and USB HID access require App Sandbox to be disabled, which **prevents Mac App Store distribution**. Paddle provides the full commerce stack for direct-distributed Mac apps: payment processing (including VAT/GST), license key generation and validation, a native macOS SDK for in-app licensing, and a seller dashboard for analytics and customer management.
 
-- **Path A — Direct distribution (Developer ID):** Signed + notarised `.app` or `.dmg` via website. No sandbox restrictions. This is the most likely path given Ledge's permission requirements
-- **Path B — Mac App Store:** Would require sandboxing workarounds (XPC helper tool for CGEventTap, etc.). Higher discoverability but significant engineering effort. Investigate feasibility
+### Paddle Account & Product Setup
 
-### Code Signing & Notarisation
+- [ ] **Create Paddle seller account** — complete identity verification, tax information, payout details
+- [ ] **Create product** in Paddle dashboard — set pricing, currency, description
+- [ ] **Configure license key settings** — activations per key (e.g., 2 Macs per license), expiry policy (perpetual vs annual), deactivation rules
+- [ ] **Configure trial settings** — 14-day trial, full functionality, no payment required to start
+- [ ] **Tax setup** — Paddle handles VAT/GST as Merchant of Record (they sell on your behalf and remit taxes)
+- [ ] **Webhook endpoints** (optional) — for order notifications, subscription events, refund alerts
 
-- [ ] Enrol in Apple Developer Program ($99/year)
-- [ ] Configure code signing with Developer ID certificate
-- [ ] Set up notarisation workflow (Xcode or `notarytool`)
-- [ ] Hardened Runtime entitlements: Accessibility, Input Monitoring
-- [ ] Investigate XPC helper for privileged operations (CGEventTap) if pursuing App Store path
-- [ ] Automated build pipeline (xcodebuild archive → notarise → staple → package)
+### Paddle SDK Integration (In-App)
 
-### User Hardening
+- [ ] **Add Paddle macOS SDK** — SPM or manual framework embedding. SDK handles: license activation window, trial management, purchase flow (opens Paddle checkout), license validation (online + offline grace period)
+- [ ] **License check at launch** — in `AppDelegate.applicationDidFinishLaunching`, before showing the panel:
+  1. Initialise Paddle SDK with product ID and vendor credentials
+  2. Check license state: `.activated`, `.trial`, `.trialExpired`, `.deactivated`
+  3. If `.activated` → proceed to normal app launch
+  4. If `.trial` → show trial banner (days remaining) on Settings window, proceed to normal launch
+  5. If `.trialExpired` or `.deactivated` → show Paddle licensing window (purchase/activate), block panel display until resolved
+- [ ] **Trial implementation** — 14-day full-functionality trial. Show remaining days in Settings header. "Buy Now" button always visible in Settings during trial. After expiry, app shows activation-required screen with purchase and license key entry
+- [ ] **Activation flow** — user enters license key in-app → Paddle SDK validates against their server → activates on this machine. Also support "Buy" button that opens Paddle checkout in browser → auto-activates after purchase
+- [ ] **Deactivation** — allow users to deactivate a license from one Mac to move it to another (Settings > License > Deactivate). Paddle SDK handles this
+- [ ] **Offline grace period** — if the Mac is offline, Paddle SDK uses cached validation. Configure grace period (e.g., 30 days) before requiring online re-validation
+- [ ] **License status in Settings** — dedicated "License" section showing: license state, email, activation count, expiry (if applicable), Deactivate/Manage buttons
 
-- [ ] **First-run onboarding flow** — guided setup: grant Accessibility permission, detect Xeneon Edge, calibrate touch, choose theme
-- [ ] **Graceful degradation** — work without Accessibility (no touch remapping), without Xeneon Edge (preview on primary display), without network (offline widgets only)
-- [ ] **Error recovery** — auto-restart CGEventTap on failure, reconnect to display on wake, recover from corrupt layout JSON
-- [ ] **Crash reporting** — lightweight crash reporter (or integrate with a service like Sentry/Crashlytics). At minimum, catch signals and write a crash log to `~/Library/Application Support/Ledge/crashes/`
-- [ ] **Auto-update mechanism** — Sparkle framework for direct distribution, or App Store automatic updates
-- [ ] **Permission health check** — Settings panel showing status of all required permissions with "Fix" buttons that open System Settings to the right pane
+### Trial & Purchase UX
+
+- [ ] **First launch (no license)** — onboarding flow starts trial automatically. No friction. User sees "14-day trial — enjoy full access" in Settings header
+- [ ] **During trial** — subtle persistent banner in Settings: "Trial: X days remaining — [Buy Now]". Full app functionality. No nag dialogs interrupting use
+- [ ] **Trial expired** — app launches to a licensing screen (not the dashboard). Clear messaging: "Your trial has ended. Purchase Ledge to continue." Two options: enter license key, or purchase (opens Paddle checkout). Dashboard and panel are hidden until activated
+- [ ] **Post-purchase** — "Thank you" confirmation. License section in Settings shows activated status. Banner disappears. App is fully unlocked permanently (or until subscription renewal, if using subscriptions)
+- [ ] **Pricing model decision** — one-time purchase (simpler, users prefer it) vs annual subscription (recurring revenue, funds ongoing development). Paddle supports both. **Recommendation: one-time purchase with major-version paid upgrades** — friendlier for a hardware companion app that users expect to "just work"
+
+### Website & Landing Page
+
+- [ ] **Domain** — register `ledge.app` or `getledge.app` or similar
+- [ ] **Landing page** — hero image/video of Ledge on the Xeneon Edge, feature highlights, screenshots, pricing, download button, Paddle "Buy Now" button
+- [ ] **Download page** — DMG download link, system requirements (macOS 14+, Corsair Xeneon Edge), version history
+- [ ] **Support page** — FAQ (permissions, troubleshooting, license transfer), contact email
+- [ ] **Privacy Policy** — required by Paddle, Apple notarisation, and API integrations (Spotify, WeatherKit). Disclose: no personal data collected beyond license activation, analytics if any, third-party services used
+- [ ] **Terms of Service / EULA** — license grant, usage restrictions, warranty disclaimer
+- [ ] **Static site generator** — use something lightweight (Hugo, Astro, or just plain HTML). Host on Vercel, Netlify, or GitHub Pages
+
+### Code Signing, Notarisation & Packaging
+
+- [ ] **Apple Developer Program** — enrol ($99/year) for Developer ID certificate
+- [ ] **Code signing** — sign with Developer ID Application certificate
+- [ ] **Hardened Runtime** — enable with entitlements: Accessibility, Input Monitoring
+- [ ] **Notarisation** — submit to Apple via `notarytool`, staple the ticket to the app
+- [ ] **DMG packaging** — branded DMG with background image, drag-to-Applications arrow, Retina-ready icons. Use `create-dmg` or similar tool
+- [ ] **Automated build pipeline** — script or CI (GitHub Actions): `xcodebuild archive` → sign → notarise → staple → create DMG → upload to website + Paddle
+- [ ] **Sparkle auto-update** — integrate Sparkle framework for delta updates. Host appcast.xml on the website. Ed25519 signing for update integrity
+
+## Phase 8: App Hardening & Reliability 📋 FUTURE
+
+**Goal:** Production-quality reliability, error handling, and polish for paying customers.
+
+### First-Run Experience
+
+- [ ] **Onboarding flow** — guided setup wizard: detect Xeneon Edge, grant Accessibility permission, calibrate touch, choose theme, select initial widgets. Runs on first launch or when no Xeneon Edge is detected
+- [ ] **Graceful degradation** — work without Accessibility (no touch remapping, mouse-only mode), without Xeneon Edge (preview mode on primary display), without network (offline widgets only)
+- [ ] **Permission health check** — Settings panel showing status of all required permissions with "Fix" buttons that open System Settings to the correct pane
+
+### Error Recovery & Crash Resilience
+
+- [ ] **CGEventTap recovery** — auto-restart on failure, reconnect to display on wake
+- [ ] **Corrupt data recovery** — detect and recover from corrupt layout JSON, widget config, or preferences. Fall back to defaults with user notification
+- [ ] **Crash reporting** — lightweight crash reporter (Sentry, or custom signal handler writing to `~/Library/Application Support/Ledge/crashes/`). Include: crash stack, last flight recorder entries, widget state
+- [ ] **Watchdog for widget hangs** — detect widgets that block the main thread for >2s, force-reload them
+
+### Security & Data
+
+- [ ] **Keychain storage** — move all tokens and credentials (Spotify, Home Assistant, Paddle license) from UserDefaults/files to macOS Keychain
 - [ ] **Input validation** — sanitise all user inputs (widget config, URLs for Web widget, Home Assistant endpoints)
-- [ ] **Keychain storage** — move all tokens and credentials (Spotify, Home Assistant) from UserDefaults/files to macOS Keychain
-- [ ] **Memory & CPU budgets** — per-widget resource limits, kill or pause widgets that exceed thresholds
-- [ ] **Accessibility (a11y)** — VoiceOver labels for Settings UI, keyboard navigation in Settings
+- [ ] **Memory & CPU budgets** — per-widget resource limits, pause widgets that exceed thresholds
 
-### Performance & Reliability
+### Performance
 
-- [ ] Performance profiling: target 60fps rendering, <5% CPU when idle
-- [ ] Instruments profiling for memory leaks, especially in long-running widget timers
-- [ ] Stress testing: 10+ widgets active, rapid page switching, sleep/wake cycles, display disconnect/reconnect
-- [ ] Launch time optimisation — target <2s to panel visible
+- [ ] **Profiling** — target 60fps rendering, <5% CPU when idle, <200MB memory
+- [ ] **Instruments profiling** for memory leaks, especially in long-running widget timers and album art caching
+- [ ] **Stress testing** — 10+ widgets active, rapid page switching, sleep/wake cycles, display disconnect/reconnect
+- [ ] **Launch time** — target <2s to panel visible
 
-### Packaging & Distribution
+### Accessibility & Polish
 
-- [ ] DMG or PKG installer with background image, Applications shortcut
-- [ ] Website with download link, screenshots, system requirements
-- [ ] Layout sharing (export/import JSON files)
-- [ ] Versioning strategy (semantic versioning, release notes)
+- [ ] **VoiceOver labels** for Settings UI, keyboard navigation in Settings
+- [ ] **Layout sharing** — export/import JSON files for sharing widget layouts
+- [ ] **Versioning** — semantic versioning, release notes, changelog displayed in Settings
 
 ### Legal & Compliance
 
-- [ ] Privacy Policy (required for notarisation and any API integrations)
-- [ ] Spotify branding compliance (attribution, logo usage, content linking)
-- [ ] Home Assistant attribution if applicable
-- [ ] WeatherKit attribution requirements
-- [ ] EULA / Terms of Service (if selling)
+- [ ] **Privacy Policy** (required for notarisation, Paddle, and API integrations)
+- [ ] **Spotify branding compliance** — attribution, logo usage, content linking per Spotify Developer Terms
+- [ ] **Home Assistant attribution** if applicable
+- [ ] **WeatherKit attribution** requirements
+- [ ] **EULA / Terms of Service** — bundled with DMG and displayed on first launch
 
 ---
 

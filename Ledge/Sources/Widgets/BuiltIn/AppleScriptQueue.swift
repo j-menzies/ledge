@@ -8,7 +8,7 @@ import Foundation
 ///
 /// Every bridge that uses NSAppleScript (SpotifyBridge, GoogleMeetBridge, etc.)
 /// must route execution through this single serial queue.
-enum AppleScriptQueue {
+nonisolated enum AppleScriptQueue {
     /// The one and only queue for AppleScript execution.
-    nonisolated(unsafe) static let shared = DispatchQueue(label: "com.ledge.AppleScriptQueue")
+    static let shared = DispatchQueue(label: "com.ledge.AppleScriptQueue")
 }

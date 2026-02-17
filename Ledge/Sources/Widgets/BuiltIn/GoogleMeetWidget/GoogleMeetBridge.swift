@@ -12,7 +12,7 @@ import os.log
 /// from a background context (`Task.detached` or an actor).
 nonisolated class GoogleMeetBridge: @unchecked Sendable {
 
-    private nonisolated(unsafe) let logger = Logger(subsystem: "com.ledge.app", category: "GoogleMeetBridge")
+    private let logger = Logger(subsystem: "com.ledge.app", category: "GoogleMeetBridge")
 
     /// Serial queue for all AppleScript execution. NSAppleScript is not thread-safe
     /// and requires consistent thread affinity for AppleEvent dispatch. Shared with

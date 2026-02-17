@@ -20,11 +20,81 @@ struct LedgeTheme: Equatable, Sendable {
 
     // Accent
     let accent: Color
+
+    // Glass-effect properties (Liquid Glass theme)
+    let glassHighlightColor: Color
+    let glassHighlightWidth: CGFloat
+    let glassShadowColor: Color
+    let glassShadowRadius: CGFloat
+    let glassInnerGlow: Bool
+    /// The background style this theme looks best with (nil = no preference).
+    let preferredBackgroundStyle: WidgetBackgroundStyle?
+
+    init(
+        name: String,
+        dashboardBackground: Color,
+        widgetBackground: Color,
+        widgetBorderColor: Color,
+        widgetBorderWidth: CGFloat,
+        widgetCornerRadius: CGFloat,
+        primaryText: Color,
+        secondaryText: Color,
+        tertiaryText: Color,
+        accent: Color,
+        glassHighlightColor: Color = .clear,
+        glassHighlightWidth: CGFloat = 0,
+        glassShadowColor: Color = .clear,
+        glassShadowRadius: CGFloat = 0,
+        glassInnerGlow: Bool = false,
+        preferredBackgroundStyle: WidgetBackgroundStyle? = nil
+    ) {
+        self.name = name
+        self.dashboardBackground = dashboardBackground
+        self.widgetBackground = widgetBackground
+        self.widgetBorderColor = widgetBorderColor
+        self.widgetBorderWidth = widgetBorderWidth
+        self.widgetCornerRadius = widgetCornerRadius
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+        self.tertiaryText = tertiaryText
+        self.accent = accent
+        self.glassHighlightColor = glassHighlightColor
+        self.glassHighlightWidth = glassHighlightWidth
+        self.glassShadowColor = glassShadowColor
+        self.glassShadowRadius = glassShadowRadius
+        self.glassInnerGlow = glassInnerGlow
+        self.preferredBackgroundStyle = preferredBackgroundStyle
+    }
 }
 
 // MARK: - Built-in Themes
 
 extension LedgeTheme {
+
+    // MARK: Liquid Glass (Default)
+
+    static let liquidGlass = LedgeTheme(
+        name: "Liquid Glass",
+        dashboardBackground: Color(white: 0.06),
+        widgetBackground: Color.white.opacity(0.06),
+        widgetBorderColor: Color.white.opacity(0.25),
+        widgetBorderWidth: 0.5,
+        widgetCornerRadius: 16,
+        primaryText: .white,
+        secondaryText: Color.white.opacity(0.65),
+        tertiaryText: Color.white.opacity(0.38),
+        accent: Color(red: 0.4, green: 0.7, blue: 1.0),
+        // Glass-specific properties
+        glassHighlightColor: Color.white.opacity(0.12),
+        glassHighlightWidth: 0.5,
+        glassShadowColor: Color.black.opacity(0.3),
+        glassShadowRadius: 12,
+        glassInnerGlow: true,
+        preferredBackgroundStyle: .blur
+    )
+
+    // MARK: Classic Themes
+
     static let dark = LedgeTheme(
         name: "Dark",
         dashboardBackground: .black,
@@ -90,13 +160,14 @@ extension LedgeTheme {
         accent: Color(red: 0.3, green: 0.8, blue: 0.4)
     )
 
-    static let allThemes: [LedgeTheme] = [.dark, .light, .midnight, .ocean, .forest]
+    static let allThemes: [LedgeTheme] = [.liquidGlass, .dark, .light, .midnight, .ocean, .forest]
 }
 
 // MARK: - Theme Mode
 
 enum ThemeMode: String, Codable, CaseIterable {
     case auto = "Auto"
+    case liquidGlass = "Liquid Glass"
     case dark = "Dark"
     case light = "Light"
     case midnight = "Midnight"
@@ -105,7 +176,8 @@ enum ThemeMode: String, Codable, CaseIterable {
 
     var theme: LedgeTheme {
         switch self {
-        case .auto: return .dark  // resolved at runtime based on system appearance
+        case .auto: return .liquidGlass  // resolved at runtime based on system appearance
+        case .liquidGlass: return .liquidGlass
         case .dark: return .dark
         case .light: return .light
         case .midnight: return .midnight
@@ -139,7 +211,7 @@ enum DashboardBackgroundMode: String, Codable, CaseIterable {
 @Observable
 class ThemeManager {
 
-    var mode: ThemeMode = .dark {
+    var mode: ThemeMode = .liquidGlass {
         didSet {
             guard isLoaded else { return }
             saveKey(key, value: mode.rawValue)
@@ -149,7 +221,7 @@ class ThemeManager {
     /// The resolved theme, accounting for system appearance in auto mode.
     var resolvedTheme: LedgeTheme {
         if mode == .auto {
-            return systemIsDark ? .dark : .light
+            return systemIsDark ? .liquidGlass : .light
         }
         return mode.theme
     }
@@ -241,7 +313,7 @@ class ThemeManager {
 // MARK: - Environment Key
 
 private struct ThemeKey: EnvironmentKey {
-    static let defaultValue = LedgeTheme.dark
+    static let defaultValue = LedgeTheme.liquidGlass
 }
 
 extension EnvironmentValues {

@@ -83,7 +83,8 @@ struct GridRenderer: View {
 
     @ViewBuilder
     private func dashboardBackground(size: CGSize) -> some View {
-        let bgStyle = themeManager.widgetBackgroundStyle
+        // Respect theme's preferred background style (e.g. Liquid Glass → blur)
+        let bgStyle = theme.preferredBackgroundStyle ?? themeManager.widgetBackgroundStyle
 
         switch themeManager.dashboardBackgroundMode {
         case .themeColor:
